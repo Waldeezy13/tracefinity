@@ -225,7 +225,8 @@ function shellSplit(text) {
 }
 const failure = (code, stderr) => Object.assign(new Error(`docker exited ${code}: ${stderr}`), { code, stderr });
 const envOf = (c) => Object.fromEntries(c.Config.Env.map((entry) => [entry.slice(0, entry.indexOf('=')), entry.slice(entry.indexOf('=') + 1)]));
-const VALUE_FLAGS = new Set(['--name', '--pull', '--restart', '--publish', '--security-opt', '--mount', '--env-file', '--env', '--label', '--memory', '--cpus', '--network', '--tmpfs', '--entrypoint']);
+const VALUE_FLAGS = new Set(['--name', '--pull', '--restart', '--publish', '--security-opt', '--mount', '--env-file', '--env', '--label', '--memory', '--memory-swap', '--cpus', '--network', '--tmpfs', '--entrypoint',
+  '--user', '--cap-drop', '--pids-limit', '--ipc', '--workdir']);
 function parseRun(args) {
   const p = { env: [], labels: {}, mounts: [], security: [], flags: {}, image: null };
   for (let i = 1; i < args.length; i++) {
@@ -238,7 +239,7 @@ function parseRun(args) {
       else if (a === '--security-opt') p.security.push(value);
       else p.flags[a] = value;
     } else if (a.startsWith('-')) p.flags[a] = true;
-    else { p.image = a; break; }
+    else { p.image = a; p.rest = args.slice(i + 1); break; }
   }
   return p;
 }
@@ -295,7 +296,7 @@ class FakeDocker {
       if (!img) throw failure(1, `Error: No such image: ${args.at(-1)}`);
       return args.includes('{{.Id}}') ? img.Id : JSON.stringify(img);
     }
-    if (cmd === 'build') return this.build(args);
+    if (cmd === 'build') return this.build(args, options);
     if (cmd === 'save') return this.save(args);
     if (cmd === 'load') {
       this.event('load');
@@ -315,6 +316,7 @@ class FakeDocker {
     }
     if (cmd === 'run') {
       const p = parseRun(args);
+      if (p.labels['io.tracefinity.release.gate']) { this.event('run', { kind: 'gate', args }); return this.gate(p, args); }
       if (p.flags['--rm']) {
         const seed = p.flags['--entrypoint'] === 'sh';
         this.event('run', { kind: seed ? 'seed' : 'admin', args });
@@ -371,7 +373,22 @@ class FakeDocker {
     if (cmd === 'buildx') { if (this.flags.buildxMissing) throw failure(1, 'docker: unknown command: docker buildx'); return 'github.com/docker/buildx v0.20.0'; }
     throw new Error(`fake docker does not implement: ${args.join(' ')}`);
   }
-  build(args) {
+  gate(p, args) {
+    const argv = p.rest;
+    const mount = (target) => p.mounts.map((m) => Object.fromEntries(m.split(',').map((x) => x.split('=')))).find((m) => m.target === target);
+    this.ctx.provisioning.push({ argv, args, network: p.flags['--network'] });
+    if (argv[0] === 'bash' && argv[1] === '/gate/check') return rc.run('bash', [mount('/gate/check').source], mount('/work').source, { env: { PATH: '/usr/local/bin:/usr/bin:/bin' }, mergeStderr: true });
+    if (this.ctx.flags.failProvision?.(argv)) throw failure(1, 'simulated');
+    if (argv.includes('freeze')) return 'pytest==9.0.0\nruff==0.9.0';
+    return argv.includes('--version') ? 'fixture 1.0' : '';
+  }
+  build(args, options = {}) {
+    if (args.at(-1) === '-') { // the sandbox toolchain image, built from a Dockerfile on stdin
+      const id = `sha256:${sha256(options.input)}`;
+      this.images.set(id, { Id: id, Config: { Env: [], Labels: {} }, RootFS: { Layers: [] }, Os: 'linux', Architecture: 'amd64', RepoDigests: [] });
+      this.tags.set(args[args.indexOf('--tag') + 1], id);
+      return '';
+    }
     const labels = {};
     let version;
     let tag;
@@ -518,7 +535,6 @@ async function world(t, { exposure = 'private', gate = GATE, previous = false, a
     ctx.calls.push({ file, args, cwd, options });
     if (ctx.missing.has(name)) throw Object.assign(new Error(`spawn ${name} ENOENT`), { code: 'ENOENT' });
     if (args.includes('--version') || (file === 'ssh' && args[0] === '-V')) return `${name} fixture 1.0`;
-    if (file === 'python3' && args[0] === '-c') { if (ctx.missing.has('venv')) throw new Error('No module named venv'); return ''; }
     if (file === 'ssh') {
       ctx.ssh.push(args);
       const remote = shellSplit(args.at(-1));
@@ -532,11 +548,6 @@ async function world(t, { exposure = 'private', gate = GATE, previous = false, a
       const rewritten = [...args];
       rewritten[rewritten.indexOf('fetch') + 2] = remoteRepo; // the pinned GitHub URL is served by the fixture remote
       return rc.run('git', ['-c', 'protocol.file.allow=always', ...rewritten], cwd, options);
-    }
-    if (['python3', 'corepack', 'python', 'pnpm', 'ruff'].includes(name)) {
-      ctx.provisioning.push({ file, args, cwd, env: options.env });
-      if (ctx.flags.failProvision?.(name, args)) throw new Error(`${name} failed: simulated`);
-      return name === 'python' && args.includes('freeze') ? 'pytest==9.0.0\nruff==0.9.0' : '';
     }
     return rc.run(file, args, cwd, options);
   };
@@ -602,15 +613,15 @@ test('prepare: exact source, isolated dependencies before the trusted gate, pinn
   assert.equal(handoff.responseContract.privateKeyFieldsAllowed, false);
   // Dependencies are provisioned inside the archived gate export, before the unchanged gate, which runs before the build.
   const index = (predicate) => ctx.calls.findIndex(predicate);
-  const venv = index((c) => c.file === 'python3' && c.args[0] === '-m');
-  const gate = index((c) => c.file === 'bash' && c.args[0] === '-c');
-  const build = index((c) => c.file === 'docker' && c.args[0] === 'build');
+  const dockerRun = (needle) => index((c) => c.file === 'docker' && c.args[0] === 'run' && c.args.includes(needle));
+  const venv = dockerRun('venv');
+  const gate = dockerRun('/gate/check');
+  const build = index((c) => c.file === 'docker' && c.args[0] === 'build' && c.args.includes('--build-arg'));
   assert(venv >= 0 && venv < gate && gate < build);
-  for (const p of ctx.provisioning) assert(p.cwd.startsWith(path.join(dir, 'source')), `provisioned in ${p.cwd}`);
-  assert(ctx.provisioning[0].env.PATH.startsWith(path.join(dir, 'source/backend/venv/bin')));
-  assert(ctx.provisioning.some((p) => hasSequence(p.args, 'install', '--frozen-lockfile')));
-  assert(ctx.provisioning.some((p) => hasSequence(p.args, '-r', 'backend/requirements.txt', 'pytest', 'ruff')));
-  const buildArgs = ctx.docker.find((d) => d.side === 'local' && d.args[0] === 'build').args;
+  assert(!ctx.calls.some((c) => ['python3', 'python', 'corepack', 'pnpm', 'ruff', 'make', 'bash'].includes(path.basename(c.file)) && !c.args.includes('--version')), 'no source or dependency code runs on the host');
+  assert(ctx.provisioning.some((p) => hasSequence(p.argv, 'install', '--frozen-lockfile')));
+  assert(ctx.provisioning.some((p) => hasSequence(p.argv, '-r', 'backend/requirements.txt', 'pytest', 'ruff')));
+  const buildArgs = ctx.docker.find((d) => d.side === 'local' && d.args[0] === 'build' && d.args.includes('--build-arg')).args;
   assert(hasSequence(buildArgs, '--build-arg', `APP_VERSION=${ctx.sourceSha}`));
   assert(hasSequence(buildArgs, '--platform', 'linux/amd64'));
   assert(ctx.local.buildContext.endsWith('/build') && !ctx.local.buildContext.includes('/source'), 'the image is built from the pristine export, never the gated one');
@@ -644,9 +655,8 @@ test('prepare fails closed and leaves nothing signable', async (t) => {
     ['source is not the exact remote main head', {}, { flags: { remoteMain: 'f'.repeat(40) } }, /exact current remote main/, 0],
     ['trusted gate absent at the source', { gate: null }, {}, /\.ade\/check|exit code 128|exited 128/, 0],
     ['trusted gate fails', { gate: '#!/bin/sh\nexit 3\n' }, {}, /exited 3/, 0],
-    ['a required tool is missing', {}, { missing: ['corepack'] }, /required tools are missing or unusable: corepack \(not installed\)/, 0],
-    ['python venv support is missing', {}, { missing: ['venv'] }, /python3 venv\/ensurepip module/, 0],
-    ['dependency provisioning fails', {}, { flags: { failProvision: (name, args) => name === 'pnpm' && args.includes('install') } }, /provisioning failed at "frontend frozen lockfile install"/, 0],
+    ['a required tool is missing', {}, { missing: ['tar'] }, /required tools are missing or unusable: tar \(not installed\)/, 0],
+    ['dependency provisioning fails', {}, { flags: { failProvision: (argv) => argv.includes('/tools/bin/pnpm') && argv.includes('install') } }, /provisioning failed at "frontend frozen lockfile install"/, 0],
     ['the target is unreachable', {}, { hostFlags: { unreachable: true } }, /Connection refused|exited 255/, 0],
     ['the target uses the containerd image store', {}, { hostFlags: { containerdStore: true } }, /containerd image store/, 0],
     ['docker buildx is missing', {}, { localFlags: { buildxMissing: true } }, /docker buildx/, 0],
@@ -658,7 +668,7 @@ test('prepare fails closed and leaves nothing signable', async (t) => {
     Object.assign(ctx.host.flags, setup.hostFlags ?? {});
     Object.assign(ctx.local.flags, setup.localFlags ?? {});
     await assert.rejects(ctx.prepare('c1'), pattern, label);
-    assert(!ctx.docker.some((d) => d.args[0] === 'build'), `${label}: nothing was built`);
+    assert(!ctx.docker.some((d) => d.args[0] === 'build' && !d.args.includes(rc.gateImageTag())), `${label}: no release image was built`);
     assert(!(await exists(path.join(ctx.dir('c1'), 'approval.json'))), `${label}: no approval exists`);
     assert.equal((await rc.status({ root: ctx.repo, candidate: 'c1', trust: ctx.trust })).status, 'preparation_failed', label);
   }
@@ -1304,4 +1314,73 @@ test('without a provider precondition a concurrent Cloudflare write is detected 
   assert(!ctx.cf.config.ingress.some((rule) => rule.hostname === 'app.example.test'));
   const approval = await readJson(path.join(ctx.dir('c1'), 'approval.json'));
   assert.equal(approval.ingress.singleWriterAttested, true, 'the operator attestation is part of what was signed');
+});
+test('sandbox: source, installs and the gate run in a credential-free, capped container; the gate has no network', async (t) => {
+  process.env.TF_HOST_SECRET_SENTINEL = 'sentinel-host-secret-4242';
+  t.after(() => { delete process.env.TF_HOST_SECRET_SENTINEL; });
+  const ctx = await world(t, { exposure: 'public', admins: true });
+  await ctx.prepare('c1');
+  const dir = ctx.dir('c1');
+  const runs = ctx.docker.filter((d) => d.side === 'local' && d.args[0] === 'run' && d.args.includes('io.tracefinity.release.gate=1')).map((d) => d.args);
+  assert(runs.length >= 8);
+  const home = os.userInfo().homedir;
+  const forbidden = [ctx.policy.target.ssh.identityFile, path.join(ctx.root, 'cf-token'), ctx.policy.target.receiptsRoot, '/var/run', 'docker.sock', `${home}/.ssh`, `${home}/.config`, `${home}/.docker`, 'SSH_AUTH_SOCK', 'sentinel-host-secret-4242'];
+  const allowedKeys = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'CI', 'COREPACK_HOME', 'COREPACK_ENABLE_DOWNLOAD_PROMPT', 'PNPM_HOME', 'PIP_DISABLE_PIP_VERSION_CHECK', 'PIP_NO_CACHE_DIR', 'npm_config_cache'];
+  for (const args of runs) {
+    assert(hasSequence(args, '--cap-drop', 'ALL') && args.includes('--read-only') && hasSequence(args, '--security-opt', 'no-new-privileges:true'));
+    assert(!args.includes('--privileged') && !args.includes('--pid') && !args.includes('--volumes-from') && !args.includes('--device') && !args.includes('host'));
+    assert(hasSequence(args, '--memory', '8g') && hasSequence(args, '--memory-swap', '8g') && hasSequence(args, '--cpus', '4') && hasSequence(args, '--pids-limit', '2048'));
+    assert(hasSequence(args, '--network', args.includes('/gate/check') ? 'none' : 'bridge'), args.includes('/gate/check') ? 'the gate has no network' : 'installs use the bridge network, never the host network');
+    const mounts = args.filter((a, i) => args[i - 1] === '--mount').map((m) => Object.fromEntries(m.split(',').map((x) => x.split('='))));
+    assert(mounts.length >= 3);
+    for (const m of mounts) {
+      assert(['/work', '/tools', '/etc/passwd', '/gate/check'].includes(m.target), m.target);
+      assert(m.type === 'bind' && m.source.startsWith(`${dir}${path.sep}`), `mount source ${m.source} is inside the candidate`);
+    }
+    const env = args.filter((a, i) => args[i - 1] === '--env').map((e) => e.split('='));
+    assert(env.every(([key]) => allowedKeys.includes(key)));
+    assert(args.includes('HOME=/tmp'));
+    for (const bad of forbidden) assert(!args.some((a) => a.includes(bad)), `sandbox argument leaks ${bad}`);
+  }
+  assert(!ctx.calls.some((c) => JSON.stringify(c.options?.env ?? {}).includes('sentinel-host-secret-4242')), 'no host environment value is handed to any child');
+  const evidence = await readJson(path.join(dir, 'checks.json'));
+  assert.equal(evidence.gateSandbox.gateNetwork, 'none');
+  assert.match(evidence.gateSandbox.image, /^sha256:[a-f0-9]{64}$/);
+  assert(!(await exists(path.join(dir, 'gate-passwd'))), 'scratch is removed');
+});
+test('sandbox mount guard refuses anything outside the candidate or covering a host secret or control socket', () => {
+  const root = '/tmp/tf-guard-fixture';
+  const dir = `${root}/repo/.approval/c1`;
+  const base = (policy = makePolicy(root, 'public')) => ({ image: `sha256:${'a'.repeat(64)}`, network: 'none', workSource: `${dir}/source`, toolsDir: `${dir}/tools`, passwdFile: `${dir}/gate-passwd`, argv: ['true'], candidateDir: dir, policy });
+  assert(rc.gateRunArgs(base()).includes('--cap-drop'));
+  const refuses = (overrides, pattern) => assert.throws(() => rc.gateRunArgs({ ...base(), ...overrides }), pattern);
+  refuses({ workSource: os.userInfo().homedir }, /outside the candidate/);
+  refuses({ workSource: root }, /outside the candidate/);
+  refuses({ workSource: path.dirname(dir) }, /outside the candidate/);
+  refuses({ toolsDir: '/var/run' }, /outside the candidate/);
+  refuses({ network: 'host' }, /bridge or none/);
+  refuses({ image: 'node:20' }, /invalid sandbox step/);
+  refuses({ workdir: '/etc' }, /invalid sandbox step/);
+  for (const [field, set] of [['identityFile', (p, v) => { p.target.ssh.identityFile = v; }], ['receiptsRoot', (p, v) => { p.target.receiptsRoot = v; }],
+    ['apiTokenFile', (p, v) => { p.target.exposure.ingress.apiTokenFile = v; }], ['cookieFile', (p, v) => { p.acceptance.cookieFile = v; }]]) {
+    const policy = makePolicy(root, 'public');
+    set(policy, `${dir}/source/${field}`);
+    refuses({ policy }, /would expose a host secret/);
+  }
+});
+test('policy: storagePath and envFile obey the same dangerous-host-path deny list as extra mounts', () => {
+  const bad = (mutate) => { const policy = structuredClone(makePolicy(BASE)); mutate(policy); assert.throws(() => rc.validatePolicy(policy), /may not be a system or socket path|not allowed/); };
+  for (const p of ['/var/run/x', '/run/docker.sock', '/etc/tracefinity', '/proc/1', '/boot/config', '/usr/local/data', '/var/lib/docker/volumes']) {
+    bad((policy) => { policy.target.container.storagePath = p; });
+    bad((policy) => { policy.target.container.envFile = p; });
+    bad((policy) => { policy.target.container.mounts[0].hostPath = p; });
+  }
+});
+test('an unreadable production-state reports a generic error without paths or file contents', async (t) => {
+  const ctx = await world(t);
+  await writeFile(path.join(ctx.policy.target.receiptsRoot, 'production-state.json'), '{"secret":"TOPSECRET-123" not json');
+  const status = await rc.productionStatus(ctx.trust);
+  assert.equal(status.status, 'unknown');
+  const text = JSON.stringify(status);
+  for (const leak of ['TOPSECRET', ctx.root, 'position', 'Unexpected']) assert(!text.includes(leak), leak);
 });

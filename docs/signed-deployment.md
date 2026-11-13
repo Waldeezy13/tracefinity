@@ -135,6 +135,13 @@ digest, target and previous state to the approval. It neither moves the checkout
 nor alters the target or tunnel. The approval expires one hour after preparation;
 an expired candidate needs a new ID and signature.
 
+Preparation runs dependency installs in a resource-capped container with only
+the candidate source and scratch tools mounted. It does not mount host
+credentials, the Docker socket or the release policy. Install steps use bridge
+network access; the gate itself has no network. This is a container isolation
+boundary, not protection against kernel escapes or services reachable from the
+install network.
+
 The operator signs the exact approval in Station Zero's signing panel. The panel
 submits the candidate; the controller verifies the signature and expiry again
 before dispatch and target changes. `status` without a candidate reports the

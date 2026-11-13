@@ -64,9 +64,44 @@ export const policyPath = () => path.join(homeDirectory(), '.config/station-zero
 // ---------------------------------------------------------------------------------------------
 const childEnv = () => ({ PATH: CHILD_PATH, HOME: homeDirectory(), LANG: 'C', LC_ALL: 'C', DOCKER_BUILDKIT: '1',
   XDG_RUNTIME_DIR: `/run/user/${process.getuid()}` });
-/** Reviewed gate code runs in the operator's own environment, minus anything that redirects tools. */
-const gateEnv = () => Object.fromEntries(Object.entries(process.env).filter(([key]) =>
-  !/^(ADE_|GIT_|npm_)/.test(key) && !['NODE_OPTIONS', 'DOCKER_HOST', 'DOCKER_CONTEXT', 'SSH_AUTH_SOCK'].includes(key)));
+/**
+ * The sandbox for everything that executes source: the trusted `.ade/check`, pip, corepack and pnpm installs. It runs in a throwaway
+ * container with no host environment (every variable is a fixed literal below), no HOME, no SSH agent or identity, no Docker or any
+ * runtime socket, no policy, receipts or target paths, and no host mount except the candidate's own source copy, a scratch tools dir,
+ * a generated one-line-per-user passwd file and the read-only gate script. Capabilities are dropped, privileges cannot grow, the root
+ * filesystem is read-only, and pids, memory and CPU are capped so a runaway dependency cannot starve the live services on this host.
+ * Dependency installs get the default bridge network (no host networking); the gate itself runs with no network at all.
+ * Threat boundary: kernel-level container escape and anything reachable over the bridge network from the install steps are out of
+ * scope; a hostile gate can still lie about its own result, which is why the image is built by a separate, signed-evidence step.
+ */
+export const GATE_DOCKERFILE = ['FROM node:20-slim AS node', 'FROM python:3.12-slim',
+  'COPY --from=node /usr/local/bin/node /usr/local/bin/node', 'COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules',
+  'RUN ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack && ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx',
+  'RUN apt-get update && apt-get install -y --no-install-recommends make git ca-certificates libgl1 libsm6 libxext6 libxrender1 libheif-dev && (apt-get install -y --no-install-recommends libglib2.0-0t64 2>/dev/null || apt-get install -y --no-install-recommends libglib2.0-0) && rm -rf /var/lib/apt/lists/*',
+  ''].join('\n');
+export const gateImageTag = () => `tracefinity-gate:${hash(GATE_DOCKERFILE).slice(0, 12)}`;
+const GATE_ENV = { PATH: '/work/backend/venv/bin:/tools/bin:/usr/local/bin:/usr/bin:/bin', HOME: '/tmp', LANG: 'C', LC_ALL: 'C', CI: 'true', COREPACK_HOME: '/tools/corepack',
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: '0', PNPM_HOME: '/tools/pnpm-home', PIP_DISABLE_PIP_VERSION_CHECK: '1', PIP_NO_CACHE_DIR: '1', npm_config_cache: '/tmp/npm' };
+export const GATE_LIMITS = { memory: '8g', cpus: '4', pids: '2048', tmp: '4g' };
+const within = (child, parent) => { const relative = path.relative(parent, child); return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)); };
+/** The exact `docker run` argv for one sandboxed step. Refuses any mount outside the candidate or covering a host secret or control socket. */
+export function gateRunArgs({ image, network, workSource, toolsDir, passwdFile, gateFile = null, workdir = '/work', argv, candidateDir, policy }) {
+  need(['bridge', 'none'].includes(network), 'sandbox network must be bridge or none');
+  need(IMAGE_ID.test(image) && /^\/work(\/[A-Za-z0-9_.-]+)*$/.test(workdir) && Array.isArray(argv) && argv.length > 0, 'invalid sandbox step');
+  const mounts = [[workSource, '/work', false], [toolsDir, '/tools', false], [passwdFile, '/etc/passwd', true], ...(gateFile ? [[gateFile, '/gate/check', true]] : [])];
+  const secrets = [policy.target.ssh.identityFile, policy.target.receiptsRoot, policyPath(), homeDirectory(), '/var/run/docker.sock', '/run/docker.sock', '/var/run', '/run',
+    ...(policy.target.exposure.ingress ? [policy.target.exposure.ingress.apiTokenFile] : []),
+    ...[policy.acceptance?.cookieFile, policy.acceptance?.publish?.tokenFile].filter(Boolean)];
+  for (const [source] of mounts) {
+    need(path.isAbsolute(source) && within(source, candidateDir), 'sandbox mount is outside the candidate directory');
+    for (const secret of secrets) need(!within(secret, source), 'sandbox mount would expose a host secret or control socket');
+  }
+  return ['run', '--rm', '--pull', 'never', '--user', `${process.getuid()}:${process.getgid()}`, '--network', network, '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true',
+    '--read-only', '--tmpfs', `/tmp:rw,exec,nosuid,mode=1777,size=${GATE_LIMITS.tmp}`, '--memory', GATE_LIMITS.memory, '--memory-swap', GATE_LIMITS.memory, '--cpus', GATE_LIMITS.cpus,
+    '--pids-limit', GATE_LIMITS.pids, '--ipc', 'private', '--workdir', workdir, '--label', 'io.tracefinity.release.gate=1',
+    ...mounts.flatMap(([source, target, readOnly]) => ['--mount', `type=bind,source=${source},target=${target}${readOnly ? ',readonly' : ''}`]),
+    ...Object.entries(GATE_ENV).flatMap(([key, value]) => ['--env', `${key}=${value}`]), image, ...argv];
+}
 /**
  * Run one program with a fixed minimal environment. Resolves to trimmed stdout. A failure carries
  * `code` and `stderr`. `input` or `stdinFile` feed stdin; `stdinSha256` demands the streamed bytes
@@ -177,6 +212,9 @@ async function sourceFingerprint(root) {
 // Operator policy
 // ---------------------------------------------------------------------------------------------
 const isPath = (v) => typeof v === 'string' && v.length < 200 && /^\/[A-Za-z0-9_./-]+$/.test(v) && path.posix.normalize(v) === v && !v.endsWith('/');
+/** Host paths that may never be mounted into the container: runtime sockets, kernel and system trees, the boot flash, credentials. */
+const DANGEROUS_HOST = /(^\/(var\/run|run|proc|sys|dev|boot|etc|root|usr|bin|sbin|lib|lib64|var\/lib\/docker)(\/|$))|docker\.sock/;
+const safeHostPath = (v) => isPath(v) && !DANGEROUS_HOST.test(v);
 const isHost = (v) => typeof v === 'string' && /^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/.test(v);
 const isPort = (v) => Number.isInteger(v) && v >= 1 && v <= 65535;
 const isIPv4 = (v) => typeof v === 'string' && /^\d+\.\d+\.\d+\.\d+$/.test(v) && v.split('.').every((o) => /^(0|[1-9]\d{0,2})$/.test(o) && Number(o) <= 255);
@@ -212,9 +250,9 @@ export function validatePolicy(p) {
   need(/^(ssh-ed25519|ecdsa-sha2-nistp256|ssh-rsa) [A-Za-z0-9+/]{20,2000}={0,3}$/.test(t.ssh.hostKey), 'ssh.hostKey must be one pinned public host key line (type and base64 only)');
   const c = t.container;
   exact(c, ['name', 'hostPort', 'storagePath', 'puid', 'pgid'], ['envFile', 'env', 'mounts', 'memory', 'cpus'], 'container');
-  need(/^[a-z0-9][a-z0-9_.-]{0,47}$/.test(c.name) && isPort(c.hostPort) && isPath(c.storagePath), 'invalid container name/hostPort/storagePath');
+  need(/^[a-z0-9][a-z0-9_.-]{0,47}$/.test(c.name) && isPort(c.hostPort) && safeHostPath(c.storagePath), 'invalid container name/hostPort/storagePath (storagePath may not be a system or socket path)');
   need(Number.isInteger(c.puid) && c.puid > 0 && c.puid < 65536 && Number.isInteger(c.pgid) && c.pgid > 0 && c.pgid < 65536, 'container puid/pgid must be non-root ids');
-  if (c.envFile !== undefined) need(isPath(c.envFile), 'invalid container envFile');
+  if (c.envFile !== undefined) need(safeHostPath(c.envFile), 'invalid container envFile (may not be a system or socket path)');
   if (c.memory !== undefined) need(/^[1-9]\d{0,5}[mg]$/.test(c.memory), 'invalid container memory');
   if (c.cpus !== undefined) need(/^(0\.\d{1,2}|[1-9]\d?(\.\d{1,2})?)$/.test(c.cpus), 'invalid container cpus');
   for (const [key, value] of Object.entries(c.env ?? {})) {
@@ -227,7 +265,7 @@ export function validatePolicy(p) {
   const targets = new Set();
   for (const mount of mounts) {
     exact(mount, ['hostPath', 'containerPath'], ['readOnly'], 'mount');
-    need(isPath(mount.hostPath) && !/docker\.sock/.test(mount.hostPath) && !/^\/(var\/run|run|proc|sys|dev|boot|etc|root)(\/|$)/.test(mount.hostPath), 'mount hostPath is not allowed');
+    need(safeHostPath(mount.hostPath), 'mount hostPath is not allowed');
     need(/^\/(config|secrets)\/[A-Za-z0-9_./-]+$/.test(mount.containerPath) && path.posix.normalize(mount.containerPath) === mount.containerPath && !targets.has(mount.containerPath),
       'mount containerPath must be a unique normalized path under /config or /secrets');
     need(mount.readOnly === undefined || typeof mount.readOnly === 'boolean', 'mount readOnly must be boolean');
@@ -794,8 +832,7 @@ function checkImageConfig(config, image, { candidate, sourceSha, triggeringMerge
   need(Array.isArray(config.rootfs?.diff_ids) && config.rootfs.diff_ids.length > 0 && config.rootfs.diff_ids.every((id) => IMAGE_ID.test(id)), 'image config carries no layer IDs');
   need(same(config.rootfs.diff_ids, image.diffIds), 'image layer IDs differ from the pinned image');
 }
-const REQUIRED_TOOLS = [['git', ['--version']], ['tar', ['--version']], ['bash', ['--version']], ['make', ['--version']], ['node', ['--version']],
-  ['python3', ['--version']], ['corepack', ['--version']], ['docker', ['--version']], ['ssh', ['-V']]];
+const REQUIRED_TOOLS = [['git', ['--version']], ['tar', ['--version']], ['docker', ['--version']], ['ssh', ['-V']]];
 /** Fail closed, naming every missing tool, before any slow work starts. */
 async function checkTools(command, cwd) {
   const versions = {};
@@ -804,41 +841,47 @@ async function checkTools(command, cwd) {
     try { versions[tool] = (await command(tool, args, cwd, { timeoutMs: 30_000 })).split('\n')[0]; }
     catch (error) { missing.push(`${tool} (${error.code === 'ENOENT' ? 'not installed' : String(error.message).slice(0, 120)})`); }
   }
-  try { await command('python3', ['-c', 'import venv, ensurepip'], cwd, { timeoutMs: 30_000 }); }
-  catch { missing.push('python3 venv/ensurepip module (install python3-venv)'); }
+  // Source, gate and dependency installs run in the sandbox container, so no python, node, corepack or make is needed (or trusted) on the host.
   try { versions.buildx = (await command('docker', ['buildx', 'version'], cwd, { timeoutMs: 30_000 })).split('\n')[0]; }
   catch { missing.push('docker buildx (the image build uses --provenance and --sbom flags)'); }
   need(missing.length === 0, `required tools are missing or unusable: ${missing.join('; ')}`);
   return versions;
 }
 /**
- * Provision isolated build/test dependencies inside the archived gate export (never the live checkout
- * or a live service) so the trusted `.ade/check` can run unchanged: a backend venv with the app's
- * requirements, pytest and ruff, and frontend modules from the frozen lockfile, with a candidate-local
- * pnpm store and corepack home. Any failure stops preparation naming the step.
+ * Build the sandbox toolchain image from the fixed in-controller Dockerfile, pin its ID, and return the runner for sandboxed steps.
  */
-async function provisionGate(command, gateRoot, toolsDir) {
-  const bin = path.join(toolsDir, 'bin');
-  await mkdir(bin, { recursive: true });
-  const venvBin = path.join(gateRoot, 'backend/venv/bin');
-  const env = { ...gateEnv(), PATH: [venvBin, bin, process.env.PATH ?? CHILD_PATH].join(':'), COREPACK_HOME: path.join(toolsDir, 'corepack'),
-    COREPACK_ENABLE_DOWNLOAD_PROMPT: '0', PNPM_HOME: path.join(toolsDir, 'pnpm-home'), CI: 'true', PIP_DISABLE_PIP_VERSION_CHECK: '1', PIP_NO_CACHE_DIR: '1' };
-  const step = async (label, file, args, cwd) => {
-    try { return await command(file, args, cwd, { env, timeoutMs: 60 * 60_000, maxOutput: 64 * 1024 * 1024 }); }
-    catch (error) { throw new Error(`gate dependency provisioning failed at "${label}": ${String(error.message).slice(0, 600)}`); }
-  };
-  const python = path.join(venvBin, 'python');
-  const frontend = path.join(gateRoot, 'frontend');
-  await step('python venv', 'python3', ['-m', 'venv', 'backend/venv'], gateRoot);
-  await step('pip upgrade', python, ['-m', 'pip', 'install', '--upgrade', 'pip'], gateRoot);
-  await step('cpu torch', python, ['-m', 'pip', 'install', '--no-deps', 'torch', 'torchvision', '--index-url', 'https://download.pytorch.org/whl/cpu'], gateRoot);
-  await step('backend requirements, pytest, ruff', python, ['-m', 'pip', 'install', '-r', 'backend/requirements.txt', 'pytest', 'ruff'], gateRoot);
-  await step('corepack pnpm shim', 'corepack', ['enable', '--install-directory', bin, 'pnpm'], gateRoot);
-  await step('frontend frozen lockfile install', path.join(bin, 'pnpm'), ['install', '--frozen-lockfile', '--store-dir', path.join(toolsDir, 'pnpm-store')], frontend);
-  const evidence = { pipFreezeSha256: hash(await step('pip freeze', python, ['-m', 'pip', 'freeze'], gateRoot)),
-    pnpmVersion: await step('pnpm version', path.join(bin, 'pnpm'), ['--version'], frontend), ruffVersion: await step('ruff version', path.join(venvBin, 'ruff'), ['--version'], gateRoot),
-    frontendLockSha256: hash(await readFile(path.join(frontend, 'pnpm-lock.yaml'))) };
-  return { env, evidence };
+async function prepareSandbox(command, { dir, gateRoot, toolsDir, gatePath, policy }) {
+  const engine = localEngine(command, dir);
+  const tag = gateImageTag();
+  await engine.docker(['build', '--pull', '--tag', tag, '-'], { input: GATE_DOCKERFILE, timeoutMs: 30 * 60_000 });
+  const image = await engine.docker(['image', 'inspect', '--format', '{{.Id}}', tag]);
+  need(IMAGE_ID.test(image), 'the sandbox image has no readable ID');
+  for (const sub of ['bin', 'corepack', 'pnpm-home', 'pnpm-store']) await mkdir(path.join(toolsDir, sub), { recursive: true });
+  const passwdFile = path.join(dir, 'gate-passwd');
+  await writeFile(passwdFile, `root:x:0:0:root:/root:/bin/sh\ngate:x:${process.getuid()}:${process.getgid()}:gate:/tmp:/bin/sh\n`, { mode: 0o644 });
+  return { image, dockerfileSha256: hash(GATE_DOCKERFILE), workSource: gateRoot, passwdFile,
+    run: async ({ label, network, argv, workdir = '/work', gate = false, timeoutMs = 60 * 60_000 }) => {
+      const args = gateRunArgs({ image, network, workSource: gateRoot, toolsDir, passwdFile, gateFile: gate ? gatePath : null, workdir, argv, candidateDir: dir, policy });
+      try { return await engine.docker(args, { timeoutMs, maxOutput: 128 * 1024 * 1024, mergeStderr: true }); }
+      catch (error) { throw new Error(`${label}: ${String(error.message).slice(0, 600)}`); }
+    } };
+}
+/**
+ * Provision isolated build/test dependencies inside the sandbox, in the archived gate export only, so the trusted `.ade/check` can
+ * run unchanged: a backend venv with the app's requirements, pytest and ruff, and frontend modules from the frozen lockfile.
+ */
+async function provisionGate(sandbox) {
+  const step = (label, argv, workdir = '/work') => sandbox.run({ label: `gate dependency provisioning failed at "${label}"`, network: 'bridge', argv, workdir });
+  await step('python venv', ['python3', '-m', 'venv', 'backend/venv']);
+  await step('pip upgrade', ['/work/backend/venv/bin/python', '-m', 'pip', 'install', '--upgrade', 'pip']);
+  await step('cpu torch', ['/work/backend/venv/bin/python', '-m', 'pip', 'install', '--no-deps', 'torch', 'torchvision', '--index-url', 'https://download.pytorch.org/whl/cpu']);
+  await step('backend requirements, pytest, ruff', ['/work/backend/venv/bin/python', '-m', 'pip', 'install', '-r', 'backend/requirements.txt', 'pytest', 'ruff']);
+  await step('corepack pnpm shim', ['corepack', 'enable', '--install-directory', '/tools/bin', 'pnpm']);
+  await step('frontend frozen lockfile install', ['/tools/bin/pnpm', 'install', '--frozen-lockfile', '--store-dir', '/tools/pnpm-store'], '/work/frontend');
+  const evidence = { pipFreezeSha256: hash(await step('pip freeze', ['/work/backend/venv/bin/python', '-m', 'pip', 'freeze'])),
+    pnpmVersion: await step('pnpm version', ['/tools/bin/pnpm', '--version'], '/work/frontend'), ruffVersion: await step('ruff version', ['/work/backend/venv/bin/ruff', '--version']),
+    frontendLockSha256: hash(await readFile(path.join(sandbox.workSource, 'frontend/pnpm-lock.yaml'))) };
+  return { evidence };
 }
 async function prepareCandidate({ root, dir, candidate, sourceSha, triggeringMerge, trust, command = run, sleep = pause, fetchImpl = fetch, timing, save }) {
   const { policy, policySha256 } = trust;
@@ -874,8 +917,9 @@ async function prepareCandidate({ root, dir, candidate, sourceSha, triggeringMer
   const gatePath = path.join(dir, 'trusted-check.sh');
   await writeFile(gatePath, `${gate}\n`, { mode: 0o700 });
   const toolsDir = path.join(dir, 'tools');
-  const provisioned = await provisionGate(command, gateRoot, toolsDir);
-  const gateLog = await command('bash', ['-c', 'exec bash "$0" 2>&1', gatePath], gateRoot, { env: provisioned.env, timeoutMs: 120 * 60_000, maxOutput: 128 * 1024 * 1024 });
+  const sandbox = await prepareSandbox(command, { dir, gateRoot, toolsDir, gatePath, policy });
+  const provisioned = await provisionGate(sandbox);
+  const gateLog = await sandbox.run({ label: 'trusted gate', network: 'none', argv: ['bash', '/gate/check'], gate: true, timeoutMs: 120 * 60_000 });
   need(await sourceFingerprint(buildRoot) === fingerprint, 'build context changed during checks');
   // Build the image from the untouched export and pin it.
   const tag = `${policy.build.imageRepository}:${candidate}`;
@@ -912,7 +956,8 @@ async function prepareCandidate({ root, dir, candidate, sourceSha, triggeringMer
   await copyFile(path.join(buildRoot, 'scripts/release-controller.mjs'), path.join(dir, 'release-controller.mjs'));
   await chmod(path.join(dir, 'release-controller.mjs'), 0o600);
   await writeFile(path.join(dir, 'checks.json'), encode({ sourceSha, triggeringMerge, gate: { path: '.ade/check', sha256: hash(await regular(gatePath)), exitCode: 0, logTail: gateLog.slice(-16384) },
-    provisioning: { tools, ...provisioned.evidence }, sourceFingerprint: fingerprint, sourceProvenance, image: { imageId, tarSha256: image.tarSha256, builderImageId }, canary,
+    provisioning: { tools, ...provisioned.evidence }, gateSandbox: { image: sandbox.image, dockerfileSha256: sandbox.dockerfileSha256, provisionNetwork: 'bridge', gateNetwork: 'none', limits: GATE_LIMITS, hostMounts: ['source copy', 'scratch tools', 'generated passwd', 'gate script (read-only)'] },
+    sourceFingerprint: fingerprint, sourceProvenance, image: { imageId, tarSha256: image.tarSha256, builderImageId }, canary,
     engine: { dockerServer: engineVersion }, controller: { preparedWith: hash(await readFile(SELF)), exported: hash(await regular(path.join(dir, 'release-controller.mjs'))) },
     remoteAccess: 'read-only' }), { mode: 0o600 });
   const artifacts = {};
@@ -927,7 +972,7 @@ async function prepareCandidate({ root, dir, candidate, sourceSha, triggeringMer
   const manifestBytes = encode(manifest);
   await writeFile(path.join(dir, 'manifest.json'), manifestBytes, { mode: 0o600 });
   // Slow cleanup first: the approval clock starts only now, after the image is built and everything is ready to sign.
-  for (const leftover of [gateRoot, buildRoot, toolsDir]) await rm(leftover, { recursive: true, force: true });
+  for (const leftover of [gateRoot, buildRoot, toolsDir, path.join(dir, 'gate-passwd')]) await rm(leftover, { recursive: true, force: true });
   await repository.close();
   const created = Date.now();
   const approval = encode({ schemaVersion: 1, kind: 'tracefinity.production-approval', candidateId: candidate, sourceSha, triggeringMerge, services: [SERVICE],
@@ -1313,7 +1358,7 @@ async function liveStatus(trust) {
   try { state = await json(path.join(trust.policy.target.receiptsRoot, 'production-state.json')); }
   catch (error) {
     if (error.code === 'ENOENT') return { status: 'not_deployed', deployedSha: null, summary: none };
-    return { status: 'unknown', deployedSha: null, summary: `production-state.json is unreadable: ${error.message}` };
+    return { status: 'unknown', deployedSha: null, summary: `production-state.json is unreadable or not valid (${typeof error.code === 'string' ? error.code : 'parse error'}); inspect the receipts directory` };
   }
   const record = state && typeof state === 'object' && !Array.isArray(state) ? state : {};
   const status = typeof record.status === 'string' ? record.status : 'unknown';
