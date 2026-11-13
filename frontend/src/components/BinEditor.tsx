@@ -38,7 +38,7 @@ type Selection =
 
 type DragState =
   | { type: 'tool'; toolId: string; startX: number; startY: number; origPoints: { x: number; y: number }[]; origHoles: { id: string; x: number; y: number }[]; origInteriorRings: { x: number; y: number }[][] }
-  | { type: 'rotate'; toolId: string; centerX: number; centerY: number; startAngle: number; origRotation: number; origPoints: { x: number; y: number }[]; origHoles: { id: string; x: number; y: number }[]; origInteriorRings: { x: number; y: number }[][] }
+  | { type: 'rotate'; toolId: string; centerX: number; centerY: number; startAngle: number; origRotation: number; origPoints: { x: number; y: number }[]; origHoles: { id: string; x: number; y: number; rotation: number }[]; origInteriorRings: { x: number; y: number }[][] }
   | { type: 'label'; labelId: string; startX: number; startY: number; origX: number; origY: number }
   | { type: 'rotate-label'; labelId: string; centerX: number; centerY: number; startAngle: number; origRotation: number }
   | null
@@ -189,7 +189,7 @@ export function BinEditor({
       centerX, centerY, startAngle,
       origRotation: tool.rotation || 0,
       origPoints: tool.points.map(p => ({ x: p.x, y: p.y })),
-      origHoles: tool.finger_holes.map(fh => ({ id: fh.id, x: fh.x, y: fh.y })),
+      origHoles: tool.finger_holes.map(fh => ({ id: fh.id, x: fh.x, y: fh.y, rotation: fh.rotation ?? 0 })),
       origInteriorRings: (tool.interior_rings ?? []).map(ring => ring.map(p => ({ x: p.x, y: p.y }))),
     })
   }
@@ -277,7 +277,7 @@ export function BinEditor({
     return false
   }, [pointInRing])
 
-  const handleMouseMove = useCallback((e: MouseEvent) => {
+  const handleMouseMove = useCallback((e: { clientX: number; clientY: number }) => {
     if (!dragging) return
     const clientX = e.clientX
     const clientY = e.clientY
@@ -340,7 +340,7 @@ export function BinEditor({
               if (!orig) return fh
               const fdx = orig.x - cx
               const fdy = orig.y - cy
-              return { ...fh, x: cx + fdx * cos - fdy * sin, y: cy + fdx * sin + fdy * cos }
+              return { ...fh, x: cx + fdx * cos - fdy * sin, y: cy + fdx * sin + fdy * cos, rotation: (orig.rotation + deltaDeg) % 360 }
             }),
             interior_rings: dragging.origInteriorRings.map(ring =>
               ring.map(p => {
@@ -388,9 +388,20 @@ export function BinEditor({
 
   useEffect(() => {
     if (dragging) {
+      const handleTouchMove = (e: TouchEvent) => {
+        if (e.touches.length !== 1) return
+        e.preventDefault()
+        handleMouseMove(e.touches[0])
+      }
+      window.addEventListener('touchmove', handleTouchMove, { passive: false })
+      window.addEventListener('touchend', handleMouseUp)
+      window.addEventListener('touchcancel', handleMouseUp)
       window.addEventListener('mousemove', handleMouseMove)
       window.addEventListener('mouseup', handleMouseUp)
       return () => {
+        window.removeEventListener('touchmove', handleTouchMove)
+        window.removeEventListener('touchend', handleMouseUp)
+        window.removeEventListener('touchcancel', handleMouseUp)
         window.removeEventListener('mousemove', handleMouseMove)
         window.removeEventListener('mouseup', handleMouseUp)
       }
@@ -512,7 +523,7 @@ export function BinEditor({
   return (
     <div className="h-full w-full relative">
       {/* floating toolbar */}
-      <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 glass-toolbar px-1.5 py-1 flex items-center gap-0.5">
+      <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 glass-toolbar px-1.5 py-1 flex items-center gap-0.5 max-w-[calc(100%-1rem)] overflow-x-auto">
         <BinEditorToolbar
           activeTool={activeTool}
           setActiveTool={setActiveTool}
@@ -525,6 +536,7 @@ export function BinEditor({
           selectedLabel={selectedLabel ?? null}
           selectedHole={selectedHole ?? null}
           selectedHoleToolId={selection?.type === 'hole' ? selection.toolId : null}
+          selectedHoleDefaultDepth={selection?.type === 'hole' ? placedTools.find(t => t.id === selection.toolId)?.depth_override ?? defaultCutoutDepth : defaultCutoutDepth}
           onEditTool={onEditTool}
           onRemoveTool={handleDeleteTool}
           onRemoveLabel={handleDeleteLabel}

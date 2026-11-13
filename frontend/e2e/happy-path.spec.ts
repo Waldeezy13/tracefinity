@@ -59,7 +59,7 @@ test.describe.serial('happy path', () => {
     await page.goto('/')
     await page.waitForLoadState('networkidle')
 
-    const fileInput = page.locator('input[type="file"]')
+    const fileInput = page.locator('input[type="file"]:not([capture])')
     await fileInput.setInputFiles(FIXTURE_IMAGE)
 
     await page.waitForURL(/\/trace\//, { timeout: 60_000 })

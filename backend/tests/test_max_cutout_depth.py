@@ -81,6 +81,39 @@ def test_shallow_depth_round_trips_through_saved_config(tmp_path):
     assert _surface_z(_generate(tmp_path, restored)) == pytest.approx(6.75)
 
 
+def test_rotated_deeper_rectangle_matches_layout_in_export(tmp_path):
+    config = GenerateRequest(grid_x=1, grid_y=1, height_units=3,
+                             cutout_depth=6, stacking_lip=False)
+    hole = ScaledFingerHole("sub-pocket", 21, 21, 2, shape="rectangle",
+                            width_mm=12, height_mm=4, rotation=45, depth_override=12)
+    poly = ScaledPolygon("tool", [(8, 8), (34, 8), (34, 34), (8, 34)],
+                         "Tool", finger_holes=[hole])
+    output = tmp_path / "rotated.stl"
+    ManifoldSTLGenerator().generate_bin([poly], config, str(output))
+    mesh = trimesh.load_mesh(output)
+    assert mesh.is_watertight
+    # SVG Y increases downwards; exported manifold Y increases upwards.
+    assert _surface_z(mesh, x=3, y=-3) == pytest.approx(9, abs=0.01)
+    assert _surface_z(mesh, x=3, y=3) == pytest.approx(15)
+
+
+def test_independent_tool_depths_and_deeper_subpocket(tmp_path):
+    config = GenerateRequest(grid_x=1, grid_y=1, height_units=3,
+                             cutout_depth=6, stacking_lip=False)
+    hole = ScaledFingerHole("deep", 11, 21, 2, shape="cylinder", depth_override=12)
+    left = ScaledPolygon("left", [(4, 14), (18, 14), (18, 28), (4, 28)],
+                         "Left", finger_holes=[hole], depth_override=8)
+    right = ScaledPolygon("right", [(24, 14), (38, 14), (38, 28), (24, 28)],
+                          "Right", depth_override=10)
+    output = tmp_path / "depths.stl"
+    ManifoldSTLGenerator().generate_bin([left, right], config, str(output))
+    mesh = trimesh.load_mesh(output)
+    assert mesh.is_watertight
+    assert _surface_z(mesh, x=-15, y=0) == pytest.approx(13)
+    assert _surface_z(mesh, x=-10, y=0) == pytest.approx(9)
+    assert _surface_z(mesh, x=10, y=0) == pytest.approx(11)
+
+
 @pytest.mark.parametrize("depth", [0, 0.24, 201])
 def test_depth_schema_rejects_out_of_range_values(depth):
     with pytest.raises(ValidationError, match="cutout depth must be between"):

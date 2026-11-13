@@ -41,6 +41,7 @@ def sync_placed_tools(bin_data, user_tools) -> bool:
             ry = (fh.x - lib_cx) * sin_r + (fh.y - lib_cy) * cos_r
             new_fh.append(fh.model_copy(update={
                 "x": placed_cx + rx, "y": placed_cy + ry,
+                "rotation": (fh.rotation + pt.rotation) % 360,
                 "depth_override": existing_overrides.get(fh.id, fh.depth_override),
             }))
 

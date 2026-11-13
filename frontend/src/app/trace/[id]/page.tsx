@@ -62,6 +62,9 @@ export default function TracePage() {
 
   const [corners, setLocalCorners] = useState<Point[]>([])
   const [paperSize, setPaperSize] = useState<PaperSize>('a4')
+  const [calibration, setCalibration] = useState<'paper' | 'markers'>('paper')
+  const [markerWidth, setMarkerWidth] = useState('')
+  const [markerHeight, setMarkerHeight] = useState('')
   const [imageUrl, setImageUrl] = useState<string>('')
   const [correctedImageUrl, setCorrectedImageUrl] = useState<string>('')
   const [polygons, setPolygons] = useState<Polygon[]>([])
@@ -118,6 +121,9 @@ export default function TracePage() {
           setProvider('manual')
         }
 
+        if (s.marker_corners?.length === 4) setCalibration('markers')
+        if (s.marker_width_mm != null) setMarkerWidth(String(s.marker_width_mm))
+        if (s.marker_height_mm != null) setMarkerHeight(String(s.marker_height_mm))
         if (s.corners) {
           setLocalCorners(s.corners)
         }
@@ -165,13 +171,16 @@ export default function TracePage() {
   }, [])
 
   async function handleCornersSubmit() {
-    if (corners.length !== 4) return
+    if (corners.length !== 4 || (calibration === 'markers' &&
+      (![markerWidth, markerHeight].every(value => value.trim() && Number(value) > 0 && Number(value) <= 5000)))) return
 
     setProcessing(true)
     setError(null)
 
     try {
-      const result = await setCorners(sessionId, corners, paperSize)
+      const result = await setCorners(sessionId, corners, paperSize, calibration === 'markers'
+        ? { width: Number(markerWidth), height: Number(markerHeight) }
+        : undefined)
       setCorrectedImageUrl(result.corrected_image_url)
       setImageVersion(Date.now())
       setPhotoWarnings(result.warnings ?? [])
@@ -399,11 +408,40 @@ export default function TracePage() {
           {step === 'corners' && (
             <div className="space-y-3">
               <CornersHint />
+              {session?.marker_corners && (
+                <div className="space-y-2">
+                  <span className="text-xs text-text-primary">Reference</span>
+                  <div className="flex gap-2">
+                    <button type="button" aria-pressed={calibration === 'markers'} onClick={() => {
+                      setCalibration('markers')
+                      setLocalCorners(session.marker_corners!)
+                    }} className="glass rounded px-3 py-2 text-xs">Marker mat{calibration === 'markers' ? ' (selected)' : ''}</button>
+                    <button type="button" aria-pressed={calibration === 'paper'} onClick={() => {
+                      setCalibration('paper')
+                      if (session.paper_corners) setLocalCorners(session.paper_corners)
+                    }} className="glass rounded px-3 py-2 text-xs">Paper{calibration === 'paper' ? ' (selected)' : ''}</button>
+                  </div>
+                </div>
+              )}
+              {!session?.marker_corners && (
+                <p className="text-xs text-text-muted">Using a marker mat? Retake the photo with all four markers visible, or use paper.</p>
+              )}
               <p className="text-xs text-text-muted">
-                Drag the corner handles to match the paper edges.
+                {calibration === 'markers'
+                  ? 'Confirm or drag handles to the centres of markers 0, 1, 2, 3. Measure the centre-to-centre spacing on your mat.'
+                  : 'Drag the corner handles to match the paper edges.'}
               </p>
-
-              <div>
+              {calibration === 'markers' ? (
+                <div className="space-y-2">
+                  <label className="block text-xs text-text-primary">Horizontal spacing 0–1 (mm)
+                    <input type="number" inputMode="decimal" min="0.01" max="5000" step="any" value={markerWidth} onChange={e => setMarkerWidth(e.target.value)} className="w-full glass rounded px-2 py-2 mt-1 text-text-primary" />
+                  </label>
+                  <label className="block text-xs text-text-primary">Vertical spacing 0–3 (mm)
+                    <input type="number" inputMode="decimal" min="0.01" max="5000" step="any" value={markerHeight} onChange={e => setMarkerHeight(e.target.value)} className="w-full glass rounded px-2 py-2 mt-1 text-text-primary" />
+                  </label>
+                  <p className="text-xs text-text-muted">Enter measured distances; printed size and printer scaling can vary.</p>
+                </div>
+              ) : <div>
                 <span className="text-xs text-text-primary tracking-[0.3px]">Paper Size</span>
                 <div className="grid grid-cols-2 gap-0.5 rounded-[10px] glass p-0.5 mt-1.5 w-full">
                   {PAPER_SIZE_OPTIONS.map((option) => (
@@ -420,7 +458,7 @@ export default function TracePage() {
                     </button>
                   ))}
                 </div>
-              </div>
+              </div>}
             </div>
           )}
 
@@ -671,7 +709,8 @@ export default function TracePage() {
           {step === 'corners' && (
             <button
               onClick={handleCornersSubmit}
-              disabled={corners.length !== 4 || processing}
+              disabled={corners.length !== 4 || processing || (calibration === 'markers' &&
+                ![markerWidth, markerHeight].every(value => value.trim() && Number(value) > 0 && Number(value) <= 5000))}
               className="btn-primary w-full py-2 text-sm inline-flex items-center justify-center gap-1.5"
             >
               {processing && <Loader2 className="w-4 h-4 animate-spin" />}

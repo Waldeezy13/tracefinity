@@ -87,6 +87,10 @@ Both generation endpoints may return `503 Service Unavailable` with
 `Retry-After: 5` when `STL_GENERATION_CONCURRENCY` is configured and every
 generation slot remains occupied for 5 seconds. Cached generation responses
 bypass this queue.
+When automatic rclone export is enabled, saved-bin generation also returns
+`502 Bad Gateway` if the remote export fails. Local outputs remain available;
+retrying generation retries the export even if the geometry is cached. See
+[automatic remote export](usage/exporting.md#automatic-remote-export).
 
 ## Bin projects
 - `GET /api/bin-projects` - list project summaries with tool/bin/placement counts

@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { Upload } from 'lucide-react'
+import { Camera, Upload } from 'lucide-react'
 import { useReducedMotion } from '@/hooks/useReducedMotion'
 
 function UploadIllustration({ reduceMotion }: { reduceMotion: boolean }) {
@@ -157,15 +157,13 @@ interface Props {
 
 export function ImageUploader({ onUpload, disabled }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
+  const cameraRef = useRef<HTMLInputElement>(null)
   const [isDragging, setIsDragging] = useState(false)
   const reduceMotion = useReducedMotion()
 
-  function handleClick() {
-    if (!disabled) inputRef.current?.click()
-  }
-
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
+    e.target.value = ''
     if (file && !disabled) onUpload(file)
   }
 
@@ -189,18 +187,19 @@ export function ImageUploader({ onUpload, disabled }: Props) {
 
   return (
     <div
-      onClick={handleClick}
+      aria-busy={disabled}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       className={`
-        glass rounded-[10px] py-6 px-6 cursor-pointer
+        glass rounded-[10px] py-6 px-6
         transition-all duration-150
-        ${isDragging ? 'border-accent bg-accent-muted scale-[1.005]' : 'hover:bg-glass-hover'}
+        ${isDragging ? 'border-accent bg-accent-muted scale-[1.005]' : ''}
         ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
       `}
     >
-      <input ref={inputRef} type="file" accept="image/*" onChange={handleChange} className="hidden" />
+      <input ref={inputRef} type="file" accept="image/*" onChange={handleChange} className="hidden" aria-label="Choose photo" />
+      <input ref={cameraRef} type="file" accept="image/*" capture="environment" onChange={handleChange} className="hidden" aria-label="Take photo" />
       {isDragging ? (
         <div className="py-4 text-center">
           <div className="w-10 h-10 mx-auto mb-3 rounded-full bg-accent-muted flex items-center justify-center">
@@ -210,35 +209,41 @@ export function ImageUploader({ onUpload, disabled }: Props) {
         </div>
       ) : (
         <div className="flex flex-col sm:flex-row items-center gap-6 sm:gap-10">
-          <div className="w-72 h-44 flex-shrink-0">
+          <div className="w-full max-w-72 h-44 flex-shrink-0">
             <UploadIllustration reduceMotion={reduceMotion} />
           </div>
           <div className="text-center sm:text-left flex-1">
             <p className="text-lg text-white font-bold mb-3 leading-snug">
-              Photograph your tools on a sheet of paper
+              Photograph your tools with a scale reference
             </p>
             <ul className="text-sm text-text-secondary leading-relaxed space-y-1.5 mb-5">
               <li className="flex items-start gap-2 justify-center sm:justify-start">
                 <span className="mt-[7px] block w-1.5 h-1.5 rounded-full bg-accent/50 flex-shrink-0" />
-                Place tools on A4, Letter, A3, or Tabloid paper
+                Place tools on paper or inside a rectangle of four ArUco markers
               </li>
               <li className="flex items-start gap-2 justify-center sm:justify-start">
                 <span className="mt-[7px] block w-1.5 h-1.5 rounded-full bg-accent/50 flex-shrink-0" />
-                Tools can overflow the paper edges
+                On a marker mat, keep tools clear of the markers
               </li>
               <li className="flex items-start gap-2 justify-center sm:justify-start">
                 <span className="mt-[7px] block w-1.5 h-1.5 rounded-full bg-accent/50 flex-shrink-0" />
-                All four paper corners must be visible
+                Keep all four paper corners or markers visible
               </li>
               <li className="flex items-start gap-2 justify-center sm:justify-start">
                 <span className="mt-[7px] block w-1.5 h-1.5 rounded-full bg-accent/50 flex-shrink-0" />
-                Take a top-down photo
+                Hold the camera directly overhead, 50–60 cm or more above the tools; keep the reference around half the frame
               </li>
             </ul>
-            <span className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-accent text-white text-sm font-semibold shadow-lg shadow-accent/20">
-              <Upload className="w-4 h-4" />
-              Upload photo
-            </span>
+            <div className="flex flex-wrap justify-center sm:justify-start gap-3">
+              <button type="button" disabled={disabled} onClick={() => cameraRef.current?.click()} className="inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-full bg-accent text-white text-sm font-semibold shadow-lg shadow-accent/20 disabled:opacity-50">
+                <Camera className="w-4 h-4" />
+                Take photo
+              </button>
+              <button type="button" disabled={disabled} onClick={() => inputRef.current?.click()} className="btn-secondary inline-flex items-center justify-center gap-2 min-h-11 px-5 text-sm">
+                <Upload className="w-4 h-4" />
+                Upload photo
+              </button>
+            </div>
           </div>
         </div>
       )}

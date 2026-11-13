@@ -256,18 +256,18 @@ function NameModal({ open, title = 'New bin', description = 'Give your bin a nam
           onChange={e => setValue(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') onConfirm(value.trim() || 'Untitled') }}
           placeholder={placeholder}
-          className="mt-3 w-full px-3 py-2 text-xs bg-elevated border border-border-subtle rounded-[7px] text-text-primary outline-none focus:border-accent"
+          className="mt-3 w-full px-3 py-2 text-base sm:text-xs bg-elevated border border-border-subtle rounded-[7px] text-text-primary outline-none focus:border-accent"
         />
         <div className="mt-4 flex justify-end gap-2">
           <button
             onClick={onCancel}
-            className="btn-secondary px-3 py-1.5 text-xs"
+            className="btn-secondary px-3 py-1.5 min-h-11 sm:min-h-0 text-xs"
           >
             Cancel
           </button>
           <button
             onClick={() => onConfirm(value.trim() || 'Untitled')}
-            className="btn-primary px-3 py-1.5 text-xs"
+            className="btn-primary px-3 py-1.5 min-h-11 sm:min-h-0 text-xs"
           >
             Create
           </button>
@@ -824,7 +824,7 @@ export default function HomePage() {
       )}
 
       {/* bins */}
-      {(binsList.length > 0 || toolsList.length > 0) && (
+      {(
         <div>
           <SectionHeader
             title="Bins"
@@ -834,7 +834,7 @@ export default function HomePage() {
           >
             <button
               onClick={() => setNameModal({})}
-              className="glass-sm rounded-[7px] px-2.5 py-1 text-[11px] text-text-secondary flex items-center gap-1.5 hover:bg-glass-hover transition-colors cursor-pointer"
+              className="glass-sm rounded-[7px] px-2.5 py-1 min-h-11 sm:min-h-0 text-[11px] text-text-secondary flex items-center gap-1.5 hover:bg-glass-hover transition-colors cursor-pointer"
             >
               <Plus className="w-3 h-3" />
               New bin

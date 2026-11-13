@@ -87,6 +87,7 @@ def estimate_camera_height_mm(
     image_h: float,
     paper_size: PaperSize,
     focal_length_35mm: float | None,
+    marker_dimensions: tuple[float, float] | None = None,
 ) -> float | None:
     """estimate camera-to-paper distance from the projected paper diagonal.
 
@@ -102,7 +103,7 @@ def estimate_camera_height_mm(
     image_diag_px = math.hypot(image_w, image_h)
     if paper_diag_px < 1.0 or image_diag_px <= 0:
         return None
-    paper_w_mm, paper_h_mm = PAPER_SIZES[paper_size]
+    paper_w_mm, paper_h_mm = marker_dimensions or PAPER_SIZES[paper_size]
     paper_diag_mm = math.hypot(paper_w_mm, paper_h_mm)
     sensor_diag_mm = paper_diag_px * FULL_FRAME_DIAG_MM / image_diag_px
     return focal_length_35mm * paper_diag_mm / sensor_diag_mm
@@ -114,8 +115,9 @@ def _check_camera_height(
     image_h: float,
     paper_size: PaperSize,
     focal_length_35mm: float | None,
+    marker_dimensions: tuple[float, float] | None = None,
 ) -> PhotoWarning | None:
-    height = estimate_camera_height_mm(corners, image_w, image_h, paper_size, focal_length_35mm)
+    height = estimate_camera_height_mm(corners, image_w, image_h, paper_size, focal_length_35mm, marker_dimensions)
     if height is None or height >= MIN_CAMERA_HEIGHT_MM:
         return None
     height_cm = round(height / 10)
@@ -127,7 +129,7 @@ def _check_camera_height(
     return PhotoWarning(
         code="camera_too_close",
         message=(
-            f"Camera looks about {height_cm} cm from the paper; {detail}. "
+            f"Camera looks about {height_cm} cm from the {'mat' if marker_dimensions else 'paper'}; {detail}. "
             "Retake from 60 cm or higher for best accuracy."
         ),
     )
@@ -183,6 +185,7 @@ def check_photo(
     paper_size: PaperSize,
     focal_length_35mm: float | None,
     capture_crop: CaptureCrop | None = None,
+    marker_dimensions: tuple[float, float] | None = None,
 ) -> list[PhotoWarning]:
     """run all photo checks; each degrades to a no-op if it cannot run.
     capture_crop is the part of the camera's frame the image kept, if not all."""
@@ -193,7 +196,7 @@ def check_photo(
 
     warnings: list[PhotoWarning] = []
     for check in (
-        lambda: _check_camera_height(corners, frame_w, frame_h, paper_size, focal_length_35mm),
+        lambda: _check_camera_height(corners, frame_w, frame_h, paper_size, focal_length_35mm, marker_dimensions),
         lambda: _check_paper_in_frame(corners, image_w, image_h),
         lambda: _check_perspective(corners),
     ):
@@ -203,5 +206,7 @@ def check_photo(
             logger.exception("photo check failed")
             continue
         if warning:
+            if marker_dimensions:
+                warning.message = warning.message.replace("paper", "marker reference")
             warnings.append(warning)
     return warnings

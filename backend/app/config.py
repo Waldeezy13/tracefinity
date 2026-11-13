@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     stl_generation_concurrency: Optional[int] = Field(default=None, gt=0)
     # hours generated export artefacts are kept; 0 keeps them forever
     stl_retention_hours: float = Field(default=24, ge=0)
+    # Named rclone remote and optional prefix; unset disables automatic export.
+    rclone_export_remote: Optional[str] = Field(default=None, pattern=r"^[A-Za-z0-9_][A-Za-z0-9_.-]*:.*$")
     log_level: str = "INFO"
     proxy_secret: Optional[str] = None
     # native (default) / proxy / open; unset with PROXY_SECRET selects proxy

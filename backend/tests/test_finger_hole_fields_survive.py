@@ -118,3 +118,22 @@ def test_sync_new_library_hole_keeps_library_override():
 
     (out,) = bin_data.placed_tools[0].finger_holes
     assert out.depth_override == 12.0
+
+
+def test_sync_rotates_cutout_orientation_with_placement():
+    source_hole = FingerHole(id="h", x=25, y=20, radius=2, shape="rectangle",
+                             width=8, height=4, rotation=30)
+    tool = Tool(id="t1", name="probe", points=SQUARE, finger_holes=[source_hole])
+    placed = PlacedTool(id="pt1", tool_id="t1", name="probe", points=SQUARE,
+                        rotation=90, finger_holes=[source_hole])
+    bin_data = BinModel(id="b1", bin_config=BinConfig(), placed_tools=[placed])
+
+    class Store:
+        def get(self, tool_id):
+            return tool if tool_id == tool.id else None
+
+    sync_placed_tools(bin_data, Store())
+    hole = bin_data.placed_tools[0].finger_holes[0]
+    assert hole.x == 20
+    assert hole.y == 25
+    assert hole.rotation == 120

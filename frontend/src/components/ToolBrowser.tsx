@@ -152,6 +152,7 @@ export function ToolBrowser({ onAddTool, binWidthMm, binHeightMm, layout = 'grid
         <div className="flex items-center gap-2">
           <h3 className="text-[10px] font-semibold text-text-muted uppercase tracking-[1.5px]">Library</h3>
           <span className="text-[10px] text-text-muted bg-elevated px-1.5 py-px rounded-full">{visibleTools.length}</span>
+          <span className="text-[10px] text-text-secondary">Tap a tool to add it</span>
           {projectId && (
             <button
               onClick={() => setShowPlaced(prev => !prev)}

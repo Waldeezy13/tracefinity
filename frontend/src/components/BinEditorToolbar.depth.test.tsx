@@ -41,4 +41,11 @@ describe('per-feature depth controls', () => {
     fireEvent.blur(depth)
     expect(onSetHoleDepthOverride).toHaveBeenCalledWith('placed', 'hole', 7.25)
   })
+
+  it('shows the parent tool depth as the inherited hole depth', () => {
+    render(<BinEditorToolbar {...props} selectedTool={null} selectedHoleToolId="placed"
+      selectedHole={{ id: 'hole', x: 1, y: 1, radius: 2, shape: 'cylinder' }}
+      selectedHoleDefaultDepth={8} />)
+    expect(screen.getByPlaceholderText('8.00')).toBeTruthy()
+  })
 })
