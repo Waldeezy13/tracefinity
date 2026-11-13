@@ -138,9 +138,12 @@ an expired candidate needs a new ID and signature.
 Preparation runs dependency installs in a resource-capped container with only
 the candidate source and scratch tools mounted. It does not mount host
 credentials, the Docker socket or the release policy. Install steps use bridge
-network access; the gate itself has no network. This is a container isolation
-boundary, not protection against kernel escapes or services reachable from the
-install network.
+network access; the gate itself has no network. The backend loads its U2-Net
+Portable paper-detection model when its API module is imported, so an install
+step fetches those weights (checksum-verified by `rembg`) into the scratch tools
+directory named by `U2NET_HOME`, and the evidence records their SHA-256. This is
+a container isolation boundary, not protection against kernel escapes or
+services reachable from the install network.
 
 The operator signs the exact approval in Station Zero's signing panel. The panel
 submits the candidate; the controller verifies the signature and expiry again
@@ -164,6 +167,45 @@ git --git-dir="$bootstrap_dir/objects.git" archive --format=tar \
 node "$bootstrap_dir/scripts/release-controller.mjs" prepare --candidate UNIQUE_ID \
   --source FULL_CURRENT_MAIN_SHA --triggering-merge FULL_TRIGGERING_MERGE_SHA
 ```
+
+Run the bootstrap from the preserved checkout's root: the controller reads and
+writes `.approval/` under its working directory. A failed preparation keeps its
+`.approval/<candidate>/` directory and the ID cannot be reused; prepare again
+with a new ID. The bootstrap needs no `scripts/` directory, no committed
+`.ade/config.json` and no checkout synchronization.
+
+What Station Zero then runs in that checkout:
+
+- **Submission** runs `.approval/<candidate>/release-controller.mjs submit`.
+  Preparation writes that copy from the exact source commit and binds its hash in
+  the signed manifest, so it exists once preparation succeeds.
+- **Status** (the `releaseStatus` command, run without a candidate) cannot rely
+  on `scripts/release-controller.mjs`, which an older checkout lacks. Station
+  Zero reads the command from the base branch's `.ade/config.json`, never from
+  the preserved checkout, and runs it with that checkout as its working
+  directory. The command's last argument pins the SHA-256 of the one controller
+  it may run. It reads `scripts/release-controller.mjs` and every
+  `.approval/*/release-controller.mjs` (regular files in regular directories;
+  symbolic links are ignored), hashes the bytes it read, and runs only bytes
+  that equal the pin: the checkout's own file if it matches, otherwise the
+  newest matching candidate copy. It runs those verified bytes from a private
+  scratch file with the single argument `status` and removes the file
+  afterwards. A file that differs from the pin is never run; when nothing
+  matches, the command exits 1 with one line on standard error (naming the
+  pin mismatch, or saying to bootstrap) and prints no status, so an absent or
+  rejected controller is never read as "not deployed". Without a candidate the
+  controller only reads the fixed trust policy and durable receipts. The pin is
+  public repository content, not a key or policy value: refresh it in
+  `.ade/config.json` in the same change that edits
+  `scripts/release-controller.mjs` (a test fails while they differ). The
+  bootstrap above fetches the merged controller, so its bytes match the pin
+  exactly when the base branch carries both. A candidate that preparation
+  exported from that commit therefore matches; one from an older commit does not.
+
+`ruff check backend/` in the trusted gate runs against a source archive that
+has no Git metadata. The Ruff configuration therefore uses `extend-exclude`, not
+`exclude`, so Ruff keeps its default exclusions (including `venv` and
+`.venv`) and does not lint dependencies the gate installs into `backend/venv`.
 
 Prepare and sign a private candidate first on a fresh installation. Provision
 the administrator on the private container as described below. Then change the
@@ -518,3 +560,12 @@ delete is raced), failed cleanup, a changed running image, record tampering,
 protected-but-unrestricted branches (teams, apps, extra users, unenforced admins,
 force pushes, deletions, unreadable protection, ruleset bypass) and leak
 scanning. No real service, credential or key is used.
+
+`node --test tests/release-controller.test.mjs` also runs the repository's
+`releaseStatus` command from `.ade/config.json` in temporary checkouts with fake
+controllers whose hash is injected as the pin (no deployed policy or key is
+involved): a matching checkout controller, an older checkout that uses a
+matching prepared candidate's copy, refusal of checkout and candidate copies that
+differ from the pin or are symbolic links, a malformed pin, exit status
+pass-through, the actionable failure when no controller exists, and that the
+committed pin equals the hash of `scripts/release-controller.mjs`.

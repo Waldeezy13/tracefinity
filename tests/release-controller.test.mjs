@@ -9,7 +9,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, lstat, realpath, symlink, chmod } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, lstat, realpath, symlink, chmod, utimes } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -380,6 +381,7 @@ class FakeDocker {
     if (argv[0] === 'bash' && argv[1] === '/gate/check') return rc.run('bash', [mount('/gate/check').source], mount('/work').source, { env: { PATH: '/usr/local/bin:/usr/bin:/bin' }, mergeStderr: true });
     if (this.ctx.flags.failProvision?.(argv)) throw failure(1, 'simulated');
     if (argv.includes('freeze')) return 'pytest==9.0.0\nruff==0.9.0';
+    if (argv.includes('-c') && argv.some((a) => a.includes('U2netpSession'))) return `Downloading data from 'https://example.invalid/u2netp.onnx'\n${sha256('u2netp')}`;
     return argv.includes('--version') ? 'fixture 1.0' : '';
   }
   build(args, options = {}) {
@@ -621,6 +623,13 @@ test('prepare: exact source, isolated dependencies before the trusted gate, pinn
   assert(!ctx.calls.some((c) => ['python3', 'python', 'corepack', 'pnpm', 'ruff', 'make', 'bash'].includes(path.basename(c.file)) && !c.args.includes('--version')), 'no source or dependency code runs on the host');
   assert(ctx.provisioning.some((p) => hasSequence(p.argv, 'install', '--frozen-lockfile')));
   assert(ctx.provisioning.some((p) => hasSequence(p.argv, '-r', 'backend/requirements.txt', 'pytest', 'ruff')));
+  // The backend fetches its paper-detection model when the API module is imported, so the network-less gate needs the weights fetched
+  // beforehand, over the install network, into the scratch tools dir that U2NET_HOME names for every sandbox step.
+  const fetchModel = ctx.provisioning.findIndex((p) => p.argv.some((a) => a.includes('U2netpSession')));
+  const gateStep = ctx.provisioning.findIndex((p) => p.argv.includes('/gate/check'));
+  assert(fetchModel >= 0 && fetchModel < gateStep && ctx.provisioning[fetchModel].network === 'bridge', 'the model weights are fetched on the install network before the gate');
+  assert(hasSequence(ctx.provisioning[fetchModel].args, '--env', 'U2NET_HOME=/tools/models') && hasSequence(ctx.provisioning[gateStep].args, '--env', 'U2NET_HOME=/tools/models'));
+  assert.equal((await readJson(path.join(dir, 'checks.json'))).provisioning.u2netpSha256, sha256('u2netp'));
   const buildArgs = ctx.docker.find((d) => d.side === 'local' && d.args[0] === 'build' && d.args.includes('--build-arg')).args;
   assert(hasSequence(buildArgs, '--build-arg', `APP_VERSION=${ctx.sourceSha}`));
   assert(hasSequence(buildArgs, '--platform', 'linux/amd64'));
@@ -657,6 +666,7 @@ test('prepare fails closed and leaves nothing signable', async (t) => {
     ['trusted gate fails', { gate: '#!/bin/sh\nexit 3\n' }, {}, /exited 3/, 0],
     ['a required tool is missing', {}, { missing: ['tar'] }, /required tools are missing or unusable: tar \(not installed\)/, 0],
     ['dependency provisioning fails', {}, { flags: { failProvision: (argv) => argv.includes('/tools/bin/pnpm') && argv.includes('install') } }, /provisioning failed at "frontend frozen lockfile install"/, 0],
+    ['the model weights cannot be fetched', {}, { flags: { failProvision: (argv) => argv.some((a) => a.includes('U2netpSession')) } }, /provisioning failed at "u2netp model weights"/, 0],
     ['the target is unreachable', {}, { hostFlags: { unreachable: true } }, /Connection refused|exited 255/, 0],
     ['the target uses the containerd image store', {}, { hostFlags: { containerdStore: true } }, /containerd image store/, 0],
     ['docker buildx is missing', {}, { localFlags: { buildxMissing: true } }, /docker buildx/, 0],
@@ -1325,7 +1335,7 @@ test('sandbox: source, installs and the gate run in a credential-free, capped co
   assert(runs.length >= 8);
   const home = os.userInfo().homedir;
   const forbidden = [ctx.policy.target.ssh.identityFile, path.join(ctx.root, 'cf-token'), ctx.policy.target.receiptsRoot, '/var/run', 'docker.sock', `${home}/.ssh`, `${home}/.config`, `${home}/.docker`, 'SSH_AUTH_SOCK', 'sentinel-host-secret-4242'];
-  const allowedKeys = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'CI', 'COREPACK_HOME', 'COREPACK_ENABLE_DOWNLOAD_PROMPT', 'PNPM_HOME', 'PIP_DISABLE_PIP_VERSION_CHECK', 'PIP_NO_CACHE_DIR', 'npm_config_cache'];
+  const allowedKeys = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'CI', 'COREPACK_HOME', 'COREPACK_ENABLE_DOWNLOAD_PROMPT', 'PNPM_HOME', 'PIP_DISABLE_PIP_VERSION_CHECK', 'PIP_NO_CACHE_DIR', 'npm_config_cache', 'U2NET_HOME'];
   for (const args of runs) {
     assert(hasSequence(args, '--cap-drop', 'ALL') && args.includes('--read-only') && hasSequence(args, '--security-opt', 'no-new-privileges:true'));
     assert(!args.includes('--privileged') && !args.includes('--pid') && !args.includes('--volumes-from') && !args.includes('--device') && !args.includes('host'));
@@ -1383,4 +1393,107 @@ test('an unreadable production-state reports a generic error without paths or fi
   assert.equal(status.status, 'unknown');
   const text = JSON.stringify(status);
   for (const leak of ['TOPSECRET', ctx.root, 'position', 'Unexpected']) assert(!text.includes(leak), leak);
+});
+
+// ---------------------------------------------------------------------------------------------
+// `.ade/config.json` releaseStatus: an older preserved Release checkout has no scripts/release-controller.mjs.
+// The command runs only a controller whose SHA-256 equals the pin in the base policy.
+// ---------------------------------------------------------------------------------------------
+const ADE_CONFIG = JSON.parse(await readFile(fileURLToPath(new URL('../.ade/config.json', import.meta.url)), 'utf8'));
+const STATUS_ARGV = ADE_CONFIG.releaseStatus;
+/** A fixture controller; its hash is injected as the pin so no deployed policy or key is involved. */
+const fake = (label, body = '') => `console.log(JSON.stringify({ label: ${JSON.stringify(label)}, args: process.argv.slice(2) }));\n${body}`;
+const PINNED = fake('pinned');
+/** Run the repository's releaseStatus argv exactly as Station Zero does (spawned directly, working directory the Task checkout), with the pin replaced. */
+const runStatus = (cwd, pin = sha256(PINNED)) => spawnSync(process.execPath, [...STATUS_ARGV.slice(1, -1), pin], { cwd, encoding: 'utf8', env: { PATH: process.env.PATH } });
+const checkout = async (t) => {
+  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'tfstatus-')));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  return dir;
+};
+const plantScript = async (dir, source) => {
+  await mkdir(path.join(dir, 'scripts'), { recursive: true });
+  await writeFile(path.join(dir, 'scripts/release-controller.mjs'), source);
+};
+const plantCandidate = async (dir, id, source = PINNED) => {
+  const candidate = path.join(dir, '.approval', id);
+  await mkdir(candidate, { recursive: true });
+  await writeFile(path.join(candidate, 'release-controller.mjs'), source);
+  return path.join(candidate, 'release-controller.mjs');
+};
+const refused = (result, pattern) => {
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, ''); // nothing ran and nothing was reported as a status
+  assert.match(result.stderr, pattern);
+};
+
+test('releaseStatus is an argv run by node, pinned to a controller hash that is the committed controller', async () => {
+  assert.equal(STATUS_ARGV[0], 'node');
+  assert.equal(STATUS_ARGV.length, 4);
+  assert.equal(STATUS_ARGV[1], '-e');
+  assert.match(STATUS_ARGV[3], /^[a-f0-9]{64}$/);
+  // Refresh the pin in .ade/config.json whenever scripts/release-controller.mjs changes.
+  assert.equal(STATUS_ARGV[3], sha256(await readFile(CONTROLLER)), 'releaseStatus pin is stale: update it to the SHA-256 of scripts/release-controller.mjs');
+  assert.deepEqual(ADE_CONFIG.releaseSigning.submit, ['node', '.approval/{candidate}/release-controller.mjs', 'submit', '--candidate', '{candidate}', '--execute']);
+});
+test('releaseStatus runs the checkout controller when it matches the pin, ahead of candidate copies', async (t) => {
+  const dir = await checkout(t);
+  await plantScript(dir, PINNED);
+  await plantCandidate(dir, 'c1', fake('candidate-with-other-bytes'));
+  const result = runStatus(dir);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { label: 'pinned', args: ['status'] }); // no candidate argument: it reports what is live
+});
+test('releaseStatus in an older checkout runs a candidate copy that matches the pin and skips newer ones that do not', async (t) => {
+  const dir = await checkout(t);
+  const older = await plantCandidate(dir, 'c-old', PINNED);
+  await utimes(older, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000));
+  await plantCandidate(dir, 'c-newest-but-different', fake('different'));
+  const result = runStatus(dir);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { label: 'pinned', args: ['status'] });
+});
+test('releaseStatus never runs a checkout controller that differs from the pin, and uses a matching candidate copy instead when one exists', async (t) => {
+  const dir = await checkout(t);
+  await plantScript(dir, fake('edited-checkout-copy'));
+  refused(runStatus(dir), /matches the SHA-256 pinned in \.ade\/config\.json; none was run/);
+  await plantCandidate(dir, 'c-ok', PINNED);
+  const result = runStatus(dir);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).label, 'pinned');
+});
+test('releaseStatus never runs candidate copies that differ from the pin, are symlinks, or sit outside a candidate directory', async (t) => {
+  const dir = await checkout(t);
+  const real = await plantCandidate(dir, 'c-real', PINNED);
+  await plantCandidate(dir, 'c-edited', `${PINNED}// edited\n`);
+  await rm(real); // the only matching bytes now live outside the approval tree, reachable only through a symlink
+  const target = path.join(dir, 'elsewhere.mjs');
+  await writeFile(target, PINNED);
+  await mkdir(path.join(dir, '.approval', 'c-link'), { recursive: true });
+  await symlink(target, path.join(dir, '.approval', 'c-link', 'release-controller.mjs'));
+  await writeFile(path.join(dir, '.approval', 'release-controller.mjs'), PINNED); // a file directly under .approval is not a candidate
+  refused(runStatus(dir), /matches the SHA-256 pinned in \.ade\/config\.json; none was run/);
+});
+test('releaseStatus without any controller fails with an actionable single message and no JSON on stdout', async (t) => {
+  const dir = await checkout(t);
+  refused(runStatus(dir), /bootstrap it as described in docs\/signed-deployment\.md/);
+  await mkdir(path.join(dir, '.approval', 'failed-attempt'), { recursive: true }); // a preparation that never produced a controller copy
+  refused(runStatus(dir), /bootstrap it as described in docs\/signed-deployment\.md/);
+});
+test('releaseStatus refuses a missing or malformed pin without running anything', async (t) => {
+  const dir = await checkout(t);
+  await plantScript(dir, PINNED);
+  for (const pin of ['', 'nothex', sha256(PINNED).toUpperCase(), sha256(PINNED).slice(1)]) refused(runStatus(dir, pin), /missing its pinned controller SHA-256/);
+  const noPin = spawnSync(process.execPath, STATUS_ARGV.slice(1, -1), { cwd: dir, encoding: 'utf8', env: { PATH: process.env.PATH } });
+  refused(noPin, /missing its pinned controller SHA-256/);
+});
+test('releaseStatus passes the controller exit status and stderr through and leaves no scratch copy', async (t) => {
+  const dir = await checkout(t);
+  const source = 'console.error("policy unreadable"); console.error(process.argv[1]); process.exitCode = 3;\n';
+  await plantScript(dir, source);
+  const result = runStatus(dir, sha256(source));
+  assert.equal(result.status, 3);
+  assert.match(result.stderr, /policy unreadable/);
+  const scratch = result.stderr.trim().split('\n').at(-1);
+  assert(!(await exists(scratch)), 'the verified copy is removed after the run');
 });

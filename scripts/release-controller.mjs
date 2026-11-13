@@ -81,7 +81,8 @@ export const GATE_DOCKERFILE = ['FROM node:20-slim AS node', 'FROM python:3.12-s
   ''].join('\n');
 export const gateImageTag = () => `tracefinity-gate:${hash(GATE_DOCKERFILE).slice(0, 12)}`;
 const GATE_ENV = { PATH: '/work/backend/venv/bin:/tools/bin:/usr/local/bin:/usr/bin:/bin', HOME: '/tmp', LANG: 'C', LC_ALL: 'C', CI: 'true', COREPACK_HOME: '/tools/corepack',
-  COREPACK_ENABLE_DOWNLOAD_PROMPT: '0', PNPM_HOME: '/tools/pnpm-home', PIP_DISABLE_PIP_VERSION_CHECK: '1', PIP_NO_CACHE_DIR: '1', npm_config_cache: '/tmp/npm' };
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: '0', PNPM_HOME: '/tools/pnpm-home', PIP_DISABLE_PIP_VERSION_CHECK: '1', PIP_NO_CACHE_DIR: '1', npm_config_cache: '/tmp/npm', U2NET_HOME: '/tools/models' };
+const MODEL_FETCH = 'import hashlib\nfrom rembg.sessions.u2netp import U2netpSession\nprint(hashlib.sha256(open(U2netpSession.download_models(), "rb").read()).hexdigest())';
 export const GATE_LIMITS = { memory: '8g', cpus: '4', pids: '2048', tmp: '4g' };
 const within = (child, parent) => { const relative = path.relative(parent, child); return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)); };
 /** The exact `docker run` argv for one sandboxed step. Refuses any mount outside the candidate or covering a host secret or control socket. */
@@ -856,7 +857,7 @@ async function prepareSandbox(command, { dir, gateRoot, toolsDir, gatePath, poli
   await engine.docker(['build', '--pull', '--tag', tag, '-'], { input: GATE_DOCKERFILE, timeoutMs: 30 * 60_000 });
   const image = await engine.docker(['image', 'inspect', '--format', '{{.Id}}', tag]);
   need(IMAGE_ID.test(image), 'the sandbox image has no readable ID');
-  for (const sub of ['bin', 'corepack', 'pnpm-home', 'pnpm-store']) await mkdir(path.join(toolsDir, sub), { recursive: true });
+  for (const sub of ['bin', 'corepack', 'models', 'pnpm-home', 'pnpm-store']) await mkdir(path.join(toolsDir, sub), { recursive: true });
   const passwdFile = path.join(dir, 'gate-passwd');
   await writeFile(passwdFile, `root:x:0:0:root:/root:/bin/sh\ngate:x:${process.getuid()}:${process.getgid()}:gate:/tmp:/bin/sh\n`, { mode: 0o644 });
   return { image, dockerfileSha256: hash(GATE_DOCKERFILE), workSource: gateRoot, passwdFile,
@@ -876,9 +877,13 @@ async function provisionGate(sandbox) {
   await step('pip upgrade', ['/work/backend/venv/bin/python', '-m', 'pip', 'install', '--upgrade', 'pip']);
   await step('cpu torch', ['/work/backend/venv/bin/python', '-m', 'pip', 'install', '--no-deps', 'torch', 'torchvision', '--index-url', 'https://download.pytorch.org/whl/cpu']);
   await step('backend requirements, pytest, ruff', ['/work/backend/venv/bin/python', '-m', 'pip', 'install', '-r', 'backend/requirements.txt', 'pytest', 'ruff']);
+  // The backend builds its U2-Net Portable paper-detection session when the API module is imported, which downloads the weights on first
+  // use. The network-less gate cannot, so fetch them here (rembg verifies the pinned checksum) into the scratch tools dir named by U2NET_HOME.
+  const modelDigest = (await step('u2netp model weights', ['/work/backend/venv/bin/python', '-c', MODEL_FETCH])).trim().split('\n').at(-1);
+  need(/^[a-f0-9]{64}$/.test(modelDigest), 'the u2netp model weights have no readable digest');
   await step('corepack pnpm shim', ['corepack', 'enable', '--install-directory', '/tools/bin', 'pnpm']);
   await step('frontend frozen lockfile install', ['/tools/bin/pnpm', 'install', '--frozen-lockfile', '--store-dir', '/tools/pnpm-store'], '/work/frontend');
-  const evidence = { pipFreezeSha256: hash(await step('pip freeze', ['/work/backend/venv/bin/python', '-m', 'pip', 'freeze'])),
+  const evidence = { pipFreezeSha256: hash(await step('pip freeze', ['/work/backend/venv/bin/python', '-m', 'pip', 'freeze'])), u2netpSha256: modelDigest,
     pnpmVersion: await step('pnpm version', ['/tools/bin/pnpm', '--version'], '/work/frontend'), ruffVersion: await step('ruff version', ['/work/backend/venv/bin/ruff', '--version']),
     frontendLockSha256: hash(await readFile(path.join(sandbox.workSource, 'frontend/pnpm-lock.yaml'))) };
   return { evidence };
