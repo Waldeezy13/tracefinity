@@ -44,6 +44,9 @@ RUN pip install --no-cache-dir --no-deps torch torchvision --index-url https://d
 RUN pip install --no-cache-dir -r backend/requirements.txt
 
 COPY backend/ ./backend/
+# Build contexts can be extracted with a restrictive umask. The supervised
+# backend runs as an unprivileged user and must be able to import its code.
+RUN chmod -R a+rX /app/backend
 
 # frontend (built)
 COPY --from=frontend-build /frontend/.next ./.next
@@ -58,8 +61,17 @@ RUN mkdir -p /app/storage/uploads /app/storage/processed /app/storage/outputs
 RUN groupadd -r -g 1000 tracefinity && \
     useradd -r -u 1000 -g tracefinity -d /app -s /sbin/nologin tracefinity
 
-# model cache inside /app so it's writable by any user
-RUN mkdir -p /app/.u2net
+# Bundle the paper detector and default local tracer. rembg verifies its downloads;
+# pin SHA-256 as well because existing cache files are not checked by rembg.
+RUN U2NET_HOME=/app/.u2net python -c "from rembg.sessions.u2netp import U2netpSession; from rembg.sessions.dis_general_use import DisSession; U2netpSession.download_models(); DisSession.download_models()" && \
+    echo "309c8469258dda742793dce0ebea8e6dd393174f89934733ecc8b14c76f4ddd8  /app/.u2net/models/u2netp/u2netp.onnx" | sha256sum -c - && \
+    echo "60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a  /app/.u2net/models/isnet-general-use/isnet-general-use.onnx" | sha256sum -c - && \
+    find /app/.u2net -type d -exec chmod 777 {} + && \
+    find /app/.u2net -type f -exec chmod 644 {} +
+
+# The upstream models are Apache-2.0; keep their license with the image.
+COPY --chmod=644 MODEL-NOTICES.txt /app/model-licenses/NOTICE.txt
+RUN cp /usr/share/common-licenses/Apache-2.0 /app/model-licenses/Apache-2.0.txt
 
 # nginx: move pid and logs to /tmp so non-root can write them
 RUN rm -f /etc/nginx/sites-enabled/default
@@ -142,7 +154,7 @@ stderr_logfile_maxbytes=0
 SUPERVISOR_EOF
 
 # make all runtime-writable directories accessible to any UID
-RUN chmod -R 777 /app/storage /app/.u2net /app/.next && \
+RUN chmod -R 777 /app/storage /app/.next && \
     chmod -R 777 /var/lib/nginx /var/log/nginx && \
     mkdir -p /tmp/nginx /tmp/supervisor && chmod 777 /tmp/nginx /tmp/supervisor
 
