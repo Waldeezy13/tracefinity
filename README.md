@@ -269,6 +269,7 @@ Step-by-step usage guides covering each part of the workflow:
 - [Keyboard shortcuts](docs/usage/keyboard-shortcuts.md)
 - [Backup and restore](docs/usage/backups.md)
 - [Authentication](docs/auth.md)
+- [Signed deployment and acceptance](docs/signed-deployment.md)
 
 ## What is Gridfinity?
 

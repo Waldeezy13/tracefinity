@@ -1,0 +1,11 @@
+{
+  "releaseSigning": {
+    "submit": ["node", ".approval/{candidate}/release-controller.mjs", "submit", "--candidate", "{candidate}", "--execute"]
+  },
+  "releaseStatus": ["node", "scripts/release-controller.mjs", "status"],
+  "releaseAcceptance": {
+    "branch": "production-state",
+    "path": "acceptance/{candidate}.json",
+    "environment": "production"
+  }
+}

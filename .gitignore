@@ -20,6 +20,9 @@ storage/
 .env
 .env.local
 
+# release candidates contain approval material and deployment metadata
+.approval/
+
 # ide
 .idea/
 .vscode/

@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+make lint
+(cd backend && venv/bin/python -m pytest)
+(cd frontend && pnpm test)
+node --test .github/scripts/*.test.js tests/release-controller.test.mjs tests/tracefinity-acceptance.test.mjs

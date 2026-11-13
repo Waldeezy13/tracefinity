@@ -66,6 +66,7 @@ RUN rm -f /etc/nginx/sites-enabled/default
 COPY <<'NGINX_EOF' /etc/nginx/sites-enabled/tracefinity.conf
 server {
     listen 3000;
+    access_log /var/log/nginx/access.log;
     client_max_body_size 25m;
 
     # api + storage -> uvicorn (120s timeout for STL generation)

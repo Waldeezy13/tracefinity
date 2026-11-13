@@ -17,6 +17,7 @@ jobs:
         with:
           node-version: 20
       - run: node --test .github/scripts/*.test.js
+      - run: node --test tests/release-controller.test.mjs tests/tracefinity-acceptance.test.mjs
 
   backend-tests:
     runs-on: ubuntu-latest
