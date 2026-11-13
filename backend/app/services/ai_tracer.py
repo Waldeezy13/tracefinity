@@ -187,6 +187,7 @@ class AITracer:
         api_key: str,
         mask_output_path: str | None = None,
         before_mask_write: Callable[[], None] | None = None,
+        saliency_crop: tuple[int, int, int, int] | None = None,
     ) -> tuple[list[Polygon], str | None]:
         """trace tools via local model or gemini mask generation.
 
@@ -199,7 +200,12 @@ class AITracer:
             return self._mock_trace(mask_output_path, before_mask_write)
 
         if self.uses_saliency:
-            mask_path = await self._generate_mask_saliency(image_path, mask_output_path, before_mask_write)
+            if saliency_crop is None:
+                mask_path = await self._generate_mask_saliency(image_path, mask_output_path, before_mask_write)
+            else:
+                mask_path = await self._generate_mask_saliency(
+                    image_path, mask_output_path, before_mask_write, saliency_crop
+                )
         else:
             mask_path = await self._generate_mask_gemini(image_path, api_key, mask_output_path, before_mask_write)
 
@@ -368,6 +374,7 @@ class AITracer:
         image_path: str,
         output_path: str | None = None,
         before_mask_write: Callable[[], None] | None = None,
+        saliency_crop: tuple[int, int, int, int] | None = None,
     ) -> str | None:
         """generate a foreground mask using a saliency model (local or remote).
 
@@ -381,7 +388,7 @@ class AITracer:
         pil_img = Image.open(image_path).convert("RGB")
         np_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
-        rect = self._detect_paper_rect(np_bgr)
+        rect = saliency_crop if saliency_crop is not None else self._detect_paper_rect(np_bgr)
         if rect is not None:
             full = await self._saliency_within(pil_img, rect)
         else:

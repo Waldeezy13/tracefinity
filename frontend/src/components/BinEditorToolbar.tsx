@@ -58,12 +58,12 @@ function DepthInput({ value, defaultDepth, maxDepth, onCommit, resetKey }: Depth
             ;(e.currentTarget as HTMLInputElement).blur()
           }
         }}
-        className="w-12 px-1 py-1 bg-elevated border border-border-subtle rounded-[6px] text-text-primary text-[10px] text-center outline-none focus:border-accent"
+        className="w-16 min-h-11 sm:w-12 sm:min-h-0 px-1 py-1 bg-elevated border border-border-subtle rounded-[6px] text-text-primary text-base sm:text-[10px] text-center outline-none focus:border-accent"
       />
       {value != null && (
         <button
           onClick={() => { setText(''); onCommit(null) }}
-          className="text-[10px] text-text-muted hover:text-text-secondary px-1"
+          className="min-w-11 min-h-11 sm:min-w-0 sm:min-h-0 text-base sm:text-[10px] text-text-muted hover:text-text-secondary px-1"
           title="Reset to default"
         >
           ×
@@ -87,6 +87,7 @@ interface Props {
   selectedLabel: TextLabel | null
   selectedHole: FingerHole | null
   selectedHoleToolId: string | null
+  selectedHoleDefaultDepth?: number
   onEditTool?: (toolId: string) => void
   onRemoveTool: () => void
   onRemoveLabel: () => void
@@ -117,6 +118,7 @@ export function BinEditorToolbar({
   selectedLabel,
   selectedHole,
   selectedHoleToolId,
+  selectedHoleDefaultDepth,
   onEditTool,
   onRemoveTool,
   onRemoveLabel,
@@ -303,12 +305,12 @@ export function BinEditorToolbar({
           </span>
           <div
             className="flex items-center gap-1 text-[10px] text-text-muted"
-            title={`Cutout depth (mm). Default: ${Math.min(maxCutoutDepth, Math.max(5, defaultCutoutDepth)).toFixed(2)}mm. Max: ${maxCutoutDepth.toFixed(2)}mm. Set deeper than the tool to clear protruding features.`}
+            title={`Cutout depth (mm). Default: ${Math.min(maxCutoutDepth, Math.max(5, selectedHoleDefaultDepth ?? defaultCutoutDepth)).toFixed(2)}mm. Max: ${maxCutoutDepth.toFixed(2)}mm. Set deeper than the tool to clear protruding features.`}
           >
             <span>Depth</span>
             <DepthInput
               value={selectedHole.depth_override}
-              defaultDepth={defaultCutoutDepth}
+              defaultDepth={selectedHoleDefaultDepth ?? defaultCutoutDepth}
               maxDepth={maxCutoutDepth}
               onCommit={(d) => onSetHoleDepthOverride(selectedHoleToolId, selectedHole.id, d)}
               resetKey={`hole:${selectedHoleToolId}:${selectedHole.id}`}

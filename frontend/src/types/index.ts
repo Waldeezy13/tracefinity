@@ -67,6 +67,10 @@ export interface Session {
   mask_image_path: string | null
   corners: Point[] | null
   paper_size: PaperSize | null
+  marker_corners?: Point[] | null
+  paper_corners?: Point[] | null
+  marker_width_mm?: number | null
+  marker_height_mm?: number | null
   scale_factor: number | null
   focal_length_35mm: number | null
   photo_warnings: PhotoWarning[] | null

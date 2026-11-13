@@ -69,7 +69,7 @@ class FingerHole(BaseModel):
     height: float | None = None  # for rectangles
     rotation: float = 0.0  # degrees
     shape: Literal["circle", "cylinder", "square", "rectangle", "filleted_rectangle"] = "circle"
-    depth_override: float | None = None  # mm; None = use bin_config.cutout_depth
+    depth_override: float | None = None  # mm; None = inherit the tool, then bin depth
 
 
 class TextLabel(BaseModel):
@@ -105,6 +105,14 @@ class CornersRequest(BaseModel):
     corners: list[Point]
     paper_size: PaperSize
     save_station_name: str | None = None
+    marker_width_mm: float | None = Field(default=None, gt=0, le=5000, allow_inf_nan=False)
+    marker_height_mm: float | None = Field(default=None, gt=0, le=5000, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_marker_dimensions(self):
+        if (self.marker_width_mm is None) != (self.marker_height_mm is None):
+            raise ValueError("both marker spacings are required")
+        return self
 
 
 class CornersResponse(BaseModel):
@@ -284,6 +292,11 @@ class Session(BaseModel):
     mask_image_path: str | None = None
     corners: list[Point] | None = None
     paper_size: PaperSize | None = None
+    marker_corners: list[Point] | None = None
+    paper_corners: list[Point] | None = None
+    marker_width_mm: float | None = None
+    marker_height_mm: float | None = None
+    marker_bounds: list[int] | None = None
     scale_factor: float | None = None
     focal_length_35mm: float | None = None
     photo_warnings: list[PhotoWarning] | None = None

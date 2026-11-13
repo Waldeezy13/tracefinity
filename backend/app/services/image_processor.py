@@ -18,6 +18,33 @@ PX_PER_MM = 10
 # a saliency mask this large is the sheet, not a tool lying on it (#213)
 TOOL_MASK_MAX_FRACTION = 0.4
 
+def detect_marker_corners(image_path: str) -> list[tuple[float, float]] | None:
+    """Find the projective centres of DICT_4X4_50 markers 0, 1, 2, 3."""
+    image = cv2.imread(image_path)
+    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+    detector = cv2.aruco.ArucoDetector(dictionary, cv2.aruco.DetectorParameters())
+    marker_corners, ids, _ = detector.detectMarkers(image)
+    if ids is None:
+        return None
+    centers = {}
+    for marker, marker_id in zip(marker_corners, ids.flatten()):
+        marker_id = int(marker_id)
+        if marker_id not in range(4):
+            continue
+        if marker_id in centers:
+            return None
+        points = np.column_stack((marker.reshape(4, 2), np.ones(4)))
+        center = np.cross(np.cross(points[0], points[2]), np.cross(points[1], points[3]))
+        if abs(center[2]) < 1e-9:
+            return None
+        centers[marker_id] = (float(center[0] / center[2]), float(center[1] / center[2]))
+    if len(centers) != 4:
+        return None
+    result = [centers[i] for i in range(4)]
+    if not cv2.isContourConvex(np.array(result, dtype=np.float32)):
+        return None
+    return result
+
 
 def _quad_aspect_ratio(
     corners: list[tuple[float, float]], principal_point: tuple[float, float]
@@ -382,6 +409,8 @@ class ImageProcessor:
         corners: list[tuple[float, float]],
         paper_size: PaperSize,
         max_dim: int,
+        marker_dimensions: tuple[float, float] | None = None,
+        marker_bounds: list[int] | None = None,
     ) -> tuple[str, float]:
         """warp image to top-down view and return output path + scale factor
         (mm per px). includes the full visible area beyond the paper so
@@ -390,14 +419,17 @@ class ImageProcessor:
         img = cv2.imread(image_path)
         src = np.array(corners, dtype="float32")
 
-        width_mm, height_mm = PAPER_SIZES[paper_size]
         h_img, w_img = img.shape[:2]
-        width_mm, height_mm = pick_paper_orientation(
-            corners, width_mm, height_mm, principal_point=(w_img / 2, h_img / 2)
-        )
+        if marker_dimensions is None:
+            width_mm, height_mm = PAPER_SIZES[paper_size]
+            width_mm, height_mm = pick_paper_orientation(
+                corners, width_mm, height_mm, principal_point=(w_img / 2, h_img / 2)
+            )
+        else:
+            width_mm, height_mm = marker_dimensions
 
-        paper_w = round(width_mm * PX_PER_MM)
-        paper_h = round(height_mm * PX_PER_MM)
+        paper_w = width_mm * PX_PER_MM
+        paper_h = height_mm * PX_PER_MM
 
         dst = np.array(
             [
@@ -441,6 +473,15 @@ class ImageProcessor:
         S = np.array([[scale, 0, offset], [0, scale, offset], [0, 0, 1]], dtype="float64")
         out_w = round(extent_w * scale)
         out_h = round(extent_h * scale)
+        if marker_bounds is not None:
+            # Crop just inside the marker centres, leaving the markers outside
+            # the initial saliency crop. Edge-touching masks can still grow it.
+            inset_x, inset_y = paper_w * 0.04, paper_h * 0.04
+            x0 = max(0, round((tx + inset_x) * scale + offset))
+            y0 = max(0, round((ty + inset_y) * scale + offset))
+            x1 = min(out_w, round((tx + paper_w - inset_x) * scale + offset))
+            y1 = min(out_h, round((ty + paper_h - inset_y) * scale + offset))
+            marker_bounds.extend([x0, y0, x1 - x0, y1 - y0])
 
         warped = cv2.warpPerspective(img, S @ T @ M, (out_w, out_h))
 

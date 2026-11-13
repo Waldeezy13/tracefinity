@@ -30,7 +30,7 @@ async function createScannedBin(page: Page, { accurate = true } = {}) {
   const fixture = await page.request.get('http://127.0.0.1:8011/__accuracy/photo.jpg')
   expect(fixture.ok()).toBeTruthy()
   await page.goto('/')
-  await page.locator('input[type="file"]').setInputFiles({
+  await page.locator('input[type="file"]:not([capture])').setInputFiles({
     name: '80-by-30-mm-rectangle.jpg',
     mimeType: 'image/jpeg',
     buffer: await fixture.body(),

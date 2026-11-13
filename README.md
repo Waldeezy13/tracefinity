@@ -71,6 +71,7 @@ By default, Tracefinity uses [IS-Net](https://github.com/xuebinqin/DIS) for loca
 | `MAX_IMAGE_PIXELS` | `64000000` | Maximum decoded pixels accepted before downscaling |
 | `STL_GENERATION_CONCURRENCY` | unlimited | Process-wide maximum STL generation jobs; excess jobs wait up to 5 seconds, then receive 503 |
 | `STL_RETENTION_HOURS` | `24` | Hours generated STL/3MF/zip exports are kept before a background sweep deletes them; a bin page regenerates them on the next visit or export download. `0` keeps exports forever |
+| `RCLONE_EXPORT_REMOTE` | disabled | Named rclone remote and optional prefix for automatic saved-bin exports, e.g. `drive:Tracefinity`. See [Exporting](docs/usage/exporting.md#automatic-remote-export) for credentials and behaviour |
 | `TRACEFINITY_ONNX_PROVIDER` | `auto` | Local ONNX provider: `auto`, `cuda`, or `cpu` |
 | `GEMINI_IMAGE_MODEL` | `gemini-3.1-flash-image-preview` | Gemini model for mask generation (see below) |
 | `TOOL_LABEL_PROVIDER` | `none` | Optional automatic tool naming: `ollama` (local vision model) or `openrouter` (any OpenAI-compatible endpoint via `OPENROUTER_URL`). See [Tool naming](docs/tool-naming.md) |

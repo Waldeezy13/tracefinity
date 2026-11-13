@@ -14,6 +14,18 @@ type Selection =
   | { type: 'label'; labelId: string }
   | null
 
+function touchAsMouse(handler: (e: React.MouseEvent) => void) {
+  return (e: React.TouchEvent) => {
+    if (e.touches.length !== 1) return
+    const touch = e.touches[0]
+    handler({
+      clientX: touch.clientX,
+      clientY: touch.clientY,
+      stopPropagation: () => e.stopPropagation(),
+    } as React.MouseEvent)
+  }
+}
+
 interface Props {
   svgRef: RefObject<SVGSVGElement | null>
   displayWidth: number
@@ -209,6 +221,8 @@ export function BinEditorCanvas({
                   strokeWidth={handleStroke}
                   className={activeTool === 'text' ? 'cursor-crosshair' : 'cursor-move'}
                   onMouseDown={handleToolMouseDown(tool.id)}
+                  onTouchStart={activeTool === 'select' ? touchAsMouse(handleToolMouseDown(tool.id)) : undefined}
+                  style={{ touchAction: activeTool === 'select' ? 'none' : undefined }}
                   onClick={stopClickUnlessText}
                 />
 
@@ -241,6 +255,8 @@ export function BinEditorCanvas({
                   fill="transparent"
                   className="cursor-move"
                   onMouseDown={handleLabelMouseDown(label.id)}
+                  onTouchStart={touchAsMouse(handleLabelMouseDown(label.id))}
+                  style={{ touchAction: 'none' }}
                   onDoubleClick={handleLabelDoubleClick(label.id)}
                   onClick={stopClick}
                 />
@@ -309,6 +325,8 @@ export function BinEditorCanvas({
                         fill="transparent"
                         className="cursor-rotate"
                         onMouseDown={handleRotateMouseDown(tool.id)}
+                        onTouchStart={touchAsMouse(handleRotateMouseDown(tool.id))}
+                        style={{ touchAction: 'none' }}
                         onClick={stopClick}
                       />
                     </g>
@@ -366,6 +384,8 @@ export function BinEditorCanvas({
                         fill="transparent"
                         className="cursor-rotate"
                         onMouseDown={handleLabelRotateMouseDown(label.id)}
+                        onTouchStart={touchAsMouse(handleLabelRotateMouseDown(label.id))}
+                        style={{ touchAction: 'none' }}
                         onClick={stopClick}
                       />
                     </g>

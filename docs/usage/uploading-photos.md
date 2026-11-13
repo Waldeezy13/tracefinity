@@ -5,6 +5,68 @@
 Tracefinity uses a sheet of paper as a known-size reference to scale outlines to real-world dimensions. Place tools flat on A4, Letter, A3, or Tabloid paper.
 
 The paper is for scale only. Tools can overflow the paper edges. The full visible area beyond the paper is included in the corrected image.
+## Marker mat as a size reference
+
+You can instead use a flat cutting mat with four printed ArUco markers. Use the
+OpenCV **DICT_4X4_50** dictionary, IDs **0, 1, 2, 3**, with their centres at
+the corners of a rectangle, in this order:
+
+```text
+0 ---------------- 1
+|                  |
+|   tools here     |
+|                  |
+3 ---------------- 2
+```
+
+Keep the markers coplanar with the tools' resting surface, flat, unobstructed,
+and separated from the tools. Include all four in the photo, including a white
+margin around each marker. The spacing need not be a particular size: measure
+the horizontal centre-to-centre distance from 0 to 1 and the vertical distance
+from 0 to 3 in millimetres. Opposite sides must have the same spacing and the
+corners must be square. For example, a 200 × 200 mm centre rectangle with
+15 mm markers leaves a useful working area; measure the actual arrangement
+rather than relying on the nominal dimensions.
+
+To generate printable marker images, with the backend dependencies installed:
+
+```bash
+cd backend
+python -c 'import cv2; d=cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50); [cv2.imwrite(f"marker-{i}.png", cv2.aruco.generateImageMarker(d, i, 600)) for i in range(4)]'
+```
+
+Print the four images as squares with a white border, at a size large enough to
+be clearly resolved in the photo (15 mm is a useful starting point). Disable
+fit-to-page and verify their size with a ruler. Attach them to the mat in the
+arrangement above, then measure the actual centre spacings after attachment.
+Keep tools inside the marker rectangle, clear of the markers. For local saliency
+tracers, the initial crop is inset 4% from each marker centre; use markers no
+wider than 8% of either centre spacing and keep tools clear of that inset.
+
+After uploading, the marker centres are detected automatically when all four
+are visible. Confirm or drag the handles to their centres, and enter both
+measured spacings before continuing. These values determine the physical scale;
+the grid printed on a mat is not assumed to have any particular spacing. If
+markers cannot be detected, use the paper reference instead. If a paper
+reference is also visible, the reference selector lets you switch to it and
+adjust its corners. Photo stations currently save paper calibration only.
+
+
+## Capture on a phone
+
+Open the dashboard on your phone and select **Take photo** to open the rear camera.
+Frame the reference and tools from directly above, at least 50–60 cm away.
+Keep all four paper corners or markers visible, with the reference taking up
+around half the frame.
+After taking the picture, accept it in the camera app to upload it. Alternatively,
+choose **Upload photo** to select an existing image. The upload opens the normal
+calibration, tracing, and save-tools workflow.
+
+After saving tools, create a bin from the dashboard. On a narrow screen the bin
+settings, tool library, layout editor, and 3D preview are stacked vertically;
+tap a library tool to add it, set the desired cutout depth in the settings or
+select a tool in the layout to override its depth, then use **Export** when
+generation finishes to download the STL.
 
 ## Tips for good results
 

@@ -81,12 +81,13 @@ from app.models.schemas import (
     UploadResponse,
 )
 from app.services.ai_tracer import AITracer
+from app.services.bin_export import BinExportError, export_bin
 from app.services.bin_service import sync_placed_tools
 from app.services.bin_store import BinStore
 from app.services.generation_lock import generation_lock
 from app.services.geometry import optimal_rotation_angle as _optimal_rotation_angle
 from app.services.image_ingest import ImageTooLargeError, ingest_image
-from app.services.image_processor import ImageProcessor
+from app.services.image_processor import ImageProcessor, detect_marker_corners
 from app.services.image_service import generate_tool_thumbnail
 from app.services.photo_checks import check_photo, extract_focal_length_35mm
 from app.services.photo_station_store import PhotoStationStore
@@ -852,6 +853,8 @@ async def upload_image(
 
     paper_size = None
     applied_station_id = None
+    marker_points = None
+    paper_points = None
     if station:
         width_delta = _dimension_delta_percent(station.image_width, image_width)
         height_delta = _dimension_delta_percent(station.image_height, image_height)
@@ -871,8 +874,11 @@ async def upload_image(
         station.last_used_at = _now_iso()
         get_photo_station_store(user_id).set(station.id, station)
     else:
+        markers = detect_marker_corners(str(image_path))
+        marker_points = [Point(x=c[0], y=c[1]) for c in markers] if markers else None
         corners = image_processor.detect_paper_corners(str(image_path))
-        corner_points = [Point(x=c[0], y=c[1]) for c in corners] if corners else None
+        paper_points = [Point(x=c[0], y=c[1]) for c in corners] if corners else None
+        corner_points = marker_points or paper_points
 
     user_sessions.set(session_id, Session(
         id=session_id,
@@ -882,6 +888,8 @@ async def upload_image(
         original_image_height=image_height,
         capture_crop=None if _is_full_capture_crop(applied_crop) else applied_crop,
         corners=corner_points,
+        marker_corners=marker_points,
+        paper_corners=paper_points,
         focal_length_35mm=focal_length,
         paper_size=paper_size,
     ))
@@ -908,6 +916,14 @@ async def set_corners(request: Request, session_id: str, req: CornersRequest, us
         raise HTTPException(status_code=404, detail="session not found")
 
     corners = [(p.x, p.y) for p in req.corners]
+    if len(corners) != 4:
+        raise HTTPException(status_code=400, detail="four corners are required")
+    marker_dimensions = (
+        (req.marker_width_mm, req.marker_height_mm)
+        if req.marker_width_mm is not None and req.marker_height_mm is not None else None
+    )
+    if marker_dimensions and req.save_station_name is not None:
+        raise HTTPException(status_code=400, detail="photo stations currently require paper calibration")
 
     # advisory photo checks run against the original before it is deleted
     photo_warnings = []
@@ -915,13 +931,19 @@ async def set_corners(request: Request, session_id: str, req: CornersRequest, us
         with Image.open(_abs(session.original_image_path)) as im:
             img_w, img_h = im.size
         photo_warnings = check_photo(
-            corners, img_w, img_h, req.paper_size, session.focal_length_35mm, session.capture_crop
+            corners, img_w, img_h, req.paper_size, session.focal_length_35mm, session.capture_crop,
+            **({"marker_dimensions": marker_dimensions} if marker_dimensions else {}),
         )
     except Exception:
         logger.exception("photo checks skipped")
 
+    marker_bounds = []
+    correction_options = (
+        {"marker_dimensions": marker_dimensions, "marker_bounds": marker_bounds}
+        if marker_dimensions else {}
+    )
     output_path, scale_factor = image_processor.apply_perspective_correction(
-        _abs(session.original_image_path), corners, req.paper_size, MAX_UPLOAD_DIM
+        _abs(session.original_image_path), corners, req.paper_size, MAX_UPLOAD_DIM, **correction_options
     )
 
     up = _user_path(user_id)
@@ -945,6 +967,9 @@ async def set_corners(request: Request, session_id: str, req: CornersRequest, us
     session.original_image_path = None
     session.corners = req.corners
     session.paper_size = req.paper_size
+    session.marker_width_mm = req.marker_width_mm
+    session.marker_height_mm = req.marker_height_mm
+    session.marker_bounds = marker_bounds or None
     session.scale_factor = scale_factor
     session.photo_warnings = photo_warnings or None
     user_sessions.set(session_id, session)
@@ -1184,6 +1209,7 @@ async def trace_tools(
             # abort the mask write (and the dir recreation it implies) if
             # the user was deleted while the model call was in flight
             before_mask_write=user_sessions.ensure_open,
+            **({"saliency_crop": tuple(session.marker_bounds)} if session.marker_bounds else {}),
         )
     except StoreClosedError:
         raise
@@ -2265,6 +2291,16 @@ def _generate_bin_stl(bin_id: str, user_id: str, user_tools: ToolStore, user_bin
     if fresh:
         fresh.stl_path = _rel(output_path, up)
         user_bins.set(bin_id, fresh)
+
+    if settings.rclone_export_remote:
+        try:
+            export_bin(settings.rclone_export_remote, user_id, bin_data.name, bin_id, up / "outputs")
+        except BinExportError as exc:
+            logger.error("Remote bin export failed for bin %s: %s", bin_id, exc)
+            raise HTTPException(
+                status_code=502,
+                detail="Bin generated locally, but remote export failed. Check server logs and retry generation.",
+            ) from None
 
     return response
 

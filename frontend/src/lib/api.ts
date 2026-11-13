@@ -139,10 +139,17 @@ export async function setCorners(
   sessionId: string,
   corners: Point[],
   paperSize: PaperSize,
+  markerDimensions?: { width: number; height: number },
 ): Promise<CornersResponse> {
   return fetchApi(`/api/sessions/${sessionId}/corners`, {
     method: 'POST',
-    body: JSON.stringify({ corners, paper_size: paperSize }),
+    body: JSON.stringify({
+      corners, paper_size: paperSize,
+      ...(markerDimensions && {
+        marker_width_mm: markerDimensions.width,
+        marker_height_mm: markerDimensions.height,
+      }),
+    }),
   })
 }
 

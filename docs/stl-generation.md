@@ -51,6 +51,15 @@ record, and `<artefact> not found` otherwise.
 - **Maximum pocket depth**: `height_units * 7 - 4.75 - 2`mm, preserving the base and a 2mm floor. The lip and raised rim do not reduce this. At 1u the physical maximum is 0.25mm and takes precedence over the usual 5mm minimum, including for per-cutout overrides and insert allowances.
 - **Pocket extrude margin**: 0.01mm epsilon for boolean cleanliness.
 
+Each placed tool can override the bin's cutout depth. A cutout shape on that
+tool inherits its depth unless given its own override; both are measured down
+from the bin's top surface and clamped to the safe maximum. To make a deeper
+sub-pocket, add and position a cylinder, rectangle, square, or filleted
+rectangle in the tool editor, then select it in the bin editor and set its depth
+greater than the tool's. A spherical finger hole has a rounded floor and its
+depth is also limited by its radius, so it is not a flat-bottom sub-pocket.
+Rectangular cutouts rotate with their tool, including after a bin is reloaded.
+
 ## Gridfinity Constants
 
 ```

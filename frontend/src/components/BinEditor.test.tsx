@@ -35,3 +35,20 @@ describe('BinEditor snap to grid', () => {
     expect(screen.getByTitle(`Snap to ${SNAP_GRID}mm grid (on)`)).toBeTruthy()
   })
 })
+
+describe('BinEditor touch selection', () => {
+  afterEach(cleanup)
+
+  it('selects a tool on touch so its depth can be edited', () => {
+    const tool = {
+      id: 'placed', tool_id: 'square', name: 'Square',
+      points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }],
+      finger_holes: [], interior_rings: [], rotation: 0, depth_override: null,
+    }
+    const { container } = render(<BinEditor {...baseProps} placedTools={[tool]} />)
+    const path = container.querySelector('path[fill-rule="evenodd"]')!
+    fireEvent.touchStart(path, { touches: [{ clientX: 20, clientY: 20 }] })
+    expect(screen.getByPlaceholderText('10.00')).toBeTruthy()
+    fireEvent.touchEnd(window)
+  })
+})

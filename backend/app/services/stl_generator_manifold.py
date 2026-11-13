@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 from app.constants import GF_GRID
 
 # Bump when geometry changes so saved previews and exports regenerate.
-STL_GEOMETRY_VERSION = 2
+STL_GEOMETRY_VERSION = 3
 
 GF_HALF_GRID = GF_GRID / 2  # 21mm
 GF_HEIGHT_UNIT = 7.0
@@ -986,7 +986,7 @@ def _make_finger_holes(
             fh_x = fh.x_mm + offset_x
             fh_y = -(fh.y_mm + offset_y)
             shape = getattr(fh, 'shape', 'circle')
-            rotation = getattr(fh, 'rotation', 0.0)
+            rotation = -getattr(fh, 'rotation', 0.0)
             override = fh.depth_override if fh.depth_override is not None else poly.depth_override
             pocket_depth = _resolve_pocket_depth(override, config, max_depth)
             try:
@@ -1060,7 +1060,7 @@ def _make_finger_hole_chamfers(
             fh_x = fh.x_mm + offset_x
             fh_y = -(fh.y_mm + offset_y)
             shape = getattr(fh, 'shape', 'circle')
-            rotation = getattr(fh, 'rotation', 0.0)
+            rotation = -getattr(fh, 'rotation', 0.0)
             override = fh.depth_override if fh.depth_override is not None else poly.depth_override
             pocket_depth = _resolve_pocket_depth(override, config, max_depth)
             eff_chamfer = min(chamfer_size, max(0.0, pocket_depth - 1))

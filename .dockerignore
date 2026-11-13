@@ -5,6 +5,8 @@ frontend/.next
 backend/venv
 backend/__pycache__
 backend/storage
+frontend/test-results
+frontend/playwright-report
 **/__pycache__
 *.pyc
 data

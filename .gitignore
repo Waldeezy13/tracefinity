@@ -13,15 +13,8 @@ build/
 tsconfig.tsbuildinfo
 
 # storage
-backend/storage/uploads/*
-backend/storage/processed/*
-backend/storage/outputs/*
-backend/storage/debug/
-backend/storage/sessions.json
+backend/storage/
 storage/
-!backend/storage/uploads/.gitkeep
-!backend/storage/processed/.gitkeep
-!backend/storage/outputs/.gitkeep
 
 # env
 .env

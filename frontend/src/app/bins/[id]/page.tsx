@@ -441,10 +441,10 @@ export default function BinPage() {
     && (stlUrl || zipUrl || threemfUrl || insertStlUrl)
 
   return (
-    <div className="h-[calc(100vh-44px)] flex">
-      {/* config sidebar - always open */}
-      <div className="w-[200px] flex-shrink-0 bg-surface border-r border-border flex flex-col">
-        <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin p-3 space-y-3">
+    <div className="flex flex-col lg:flex-row lg:h-[calc(100vh-44px)]">
+      {/* config sidebar */}
+      <div className="w-full lg:w-[200px] flex-shrink-0 bg-surface border-b lg:border-b-0 lg:border-r border-border flex flex-col">
+        <div className="lg:flex-1 lg:min-h-0 lg:overflow-y-auto scrollbar-thin p-3 space-y-3">
           <div className="glass rounded-[10px] px-3 py-3">
             <div className="flex items-center gap-2 mb-3">
               <Breadcrumb segments={[
@@ -514,7 +514,7 @@ export default function BinPage() {
             <div className="relative" ref={exportRef}>
               <button
                 onClick={() => setExportOpen(p => !p)}
-                className="btn-primary w-full py-2 text-[11px] font-medium inline-flex items-center justify-center gap-1 cursor-pointer"
+                className="btn-primary w-full py-2 min-h-11 lg:min-h-0 text-[11px] font-medium inline-flex items-center justify-center gap-1 cursor-pointer"
               >
                 <Download className="w-3.5 h-3.5" />
                 Export
@@ -525,7 +525,7 @@ export default function BinPage() {
                   {stlUrl && (
                     <button
                       onClick={() => { handleDownload(); setExportOpen(false) }}
-                      className="w-full text-left px-3 py-1.5 text-[11px] text-text-secondary hover:bg-glass-hover hover:text-text-primary transition-colors cursor-pointer flex items-center gap-2"
+                      className="w-full min-h-11 lg:min-h-0 text-left px-3 py-1.5 text-[11px] text-text-secondary hover:bg-glass-hover hover:text-text-primary transition-colors cursor-pointer flex items-center gap-2"
                     >
                       <Package className="w-3 h-3" />
                       {zipUrl ? 'Full STL' : 'STL'}
@@ -534,7 +534,7 @@ export default function BinPage() {
                   {zipUrl && (
                     <button
                       onClick={() => { handleDownloadZip(); setExportOpen(false) }}
-                      className="w-full text-left px-3 py-1.5 text-[11px] text-text-secondary hover:bg-glass-hover hover:text-text-primary transition-colors cursor-pointer flex items-center gap-2"
+                      className="w-full min-h-11 lg:min-h-0 text-left px-3 py-1.5 text-[11px] text-text-secondary hover:bg-glass-hover hover:text-text-primary transition-colors cursor-pointer flex items-center gap-2"
                     >
                       <Package className="w-3 h-3" />
                       ZIP ({splitCount} parts)
@@ -543,7 +543,7 @@ export default function BinPage() {
                   {threemfUrl && (
                     <button
                       onClick={() => { handleDownloadThreemf(); setExportOpen(false) }}
-                      className="w-full text-left px-3 py-1.5 text-[11px] text-text-secondary hover:bg-glass-hover hover:text-text-primary transition-colors cursor-pointer flex items-center gap-2"
+                      className="w-full min-h-11 lg:min-h-0 text-left px-3 py-1.5 text-[11px] text-text-secondary hover:bg-glass-hover hover:text-text-primary transition-colors cursor-pointer flex items-center gap-2"
                     >
                       <Package className="w-3 h-3" />
                       3MF
@@ -552,7 +552,7 @@ export default function BinPage() {
                   {insertStlUrl && (
                     <button
                       onClick={() => { handleDownloadInsert(); setExportOpen(false) }}
-                      className="w-full text-left px-3 py-1.5 text-[11px] text-text-secondary hover:bg-glass-hover hover:text-text-primary transition-colors cursor-pointer flex items-center gap-2"
+                      className="w-full min-h-11 lg:min-h-0 text-left px-3 py-1.5 text-[11px] text-text-secondary hover:bg-glass-hover hover:text-text-primary transition-colors cursor-pointer flex items-center gap-2"
                     >
                       <Package className="w-3 h-3" />
                       Insert STL
@@ -580,9 +580,9 @@ export default function BinPage() {
         </div>
 
         {/* canvas + 3D preview side by side, equal width */}
-        <div className="flex-1 min-h-0 flex">
+        <div className="flex flex-col lg:flex-row lg:flex-1 lg:min-h-0">
           {/* canvas */}
-          <div className="flex-1 min-w-0 relative bg-inset overflow-hidden" data-testid="bin-editor">
+          <div className="h-[60vh] min-h-[360px] lg:h-auto lg:min-h-0 lg:flex-1 min-w-0 relative bg-inset overflow-hidden" data-testid="bin-editor">
             <div className="absolute inset-0">
               <BinEditor
                 placedTools={placedTools}
@@ -625,7 +625,7 @@ export default function BinPage() {
           </div>
 
           {/* 3D preview - same width as canvas */}
-          <div className="flex-1 min-w-0 bg-surface border-l border-border flex flex-col">
+          <div className="h-[360px] lg:h-auto lg:flex-1 min-w-0 bg-surface border-t lg:border-t-0 lg:border-l border-border flex flex-col">
             <div className="px-3 py-2 border-b border-border flex-shrink-0">
               <h3 className="text-[10px] font-semibold text-text-muted uppercase tracking-[1.5px]">3D Preview</h3>
             </div>
