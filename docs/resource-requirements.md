@@ -34,8 +34,8 @@ Storage scales with usage. Rough sizing:
 
 | What | Size |
 |-|-|
-| Docker image | ~2.5GB (includes model weights) |
-| Model weights (from-source, first run) | ~500MB downloaded |
+| Docker image | Size varies by platform; includes ~183 MB of default model weights |
+| Default model weights (from-source, first use) | ~183 MB downloaded |
 | Per photo (corrected + masks) | ~2-5MB |
 | Per tool (JSON + SVG) | ~10-50KB |
 | Per bin (JSON + STL/3MF) | ~1-10MB |

@@ -1,0 +1,14 @@
+Bundled model weights
+
+U-2-Net Portable (u2netp), by Xuebin Qin et al.
+https://github.com/xuebinqin/U-2-Net
+https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx
+
+IS-Net general use, by Xuebin Qin et al.
+https://github.com/xuebinqin/DIS
+https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx
+
+The upstream projects are licensed under Apache License 2.0, included alongside
+this notice. The ONNX assets are hosted by rembg; their exact conversion and
+checkpoint provenance are not documented by that project. See
+https://github.com/danielgatis/rembg/issues/837.

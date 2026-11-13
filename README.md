@@ -171,7 +171,7 @@ Tracefinity supports three ways to trace tool outlines from photos. All three pr
 
 ### Local models (default)
 
-When no API key is configured, Tracefinity runs a local salient object detection model. No API key, no network access, no cost. Model weights download automatically on first trace. Three CPU-friendly models are available by default, selectable via the `TRACERS` env var or the UI dropdown:
+When no API key is configured, Tracefinity runs a local salient object detection model. The Docker image includes the default IS-Net and paper-detection weights, so it works offline after installation. Source installations download weights on first use. Optional local models download separately and require network access on first use. Three CPU-friendly models are available, selectable via the `TRACERS` env var or the UI dropdown:
 
 | Model | Speed (CPU) | Min RAM | Quality | Notes |
 |-|-|-|-|-|
